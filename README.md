@@ -112,7 +112,7 @@ xattr -cr /Applications/TON\ Browser.app
 **One-line install:** Open Terminal and run:
 
 ```bash
-curl -LO https://github.com/TONresistor/Tonnet-Browser/releases/latest/download/TON.Browser-1.0.0-universal.dmg && hdiutil attach TON.Browser-1.0.0-universal.dmg && cp -R "/Volumes/TON Browser/TON Browser.app" /Applications/ && hdiutil detach "/Volumes/TON Browser" && xattr -cr /Applications/TON\ Browser.app && open /Applications/TON\ Browser.app
+curl -LO https://github.com/TONresistor/tonnet-browser/releases/latest/download/TON.Browser-1.0.0-universal.dmg && hdiutil attach TON.Browser-1.0.0-universal.dmg && cp -R "/Volumes/TON Browser 1.0.0-universal/TON Browser.app" /Applications/ && hdiutil detach "/Volumes/TON Browser 1.0.0-universal" && xattr -cr /Applications/TON\ Browser.app && open /Applications/TON\ Browser.app
 ```
 
 ### Linux
