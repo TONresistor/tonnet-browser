@@ -362,8 +362,16 @@ app.whenReady().then(async () => {
       {
         label: 'View',
         submenu: [
-          { role: 'reload' },
-          { role: 'forceReload' },
+          {
+            label: 'Reload',
+            accelerator: 'Command+R',
+            click: () => services?.tabManager.reloadActivePage(false),
+          },
+          {
+            label: 'Force Reload',
+            accelerator: 'Command+Shift+R',
+            click: () => services?.tabManager.reloadActivePage(true),
+          },
           { type: 'separator' },
           {
             label: 'Reset Zoom',

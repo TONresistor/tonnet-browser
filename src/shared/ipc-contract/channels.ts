@@ -91,6 +91,7 @@ export const BROWSING_CHANNELS = {
   pageTitle: 'page:title',
   pageFavicon: 'page:favicon',
   pageZoom: 'page:zoom',
+  shortcut: 'browser:shortcut',
   contextOpenLink: 'context:open-link',
   tabHistoryReset: 'tab:history-reset',
 } as const
@@ -193,6 +194,7 @@ export const MAIN_RENDERER_EVENT_CHANNELS = [
   BROWSING_CHANNELS.pageTitle,
   BROWSING_CHANNELS.pageFavicon,
   BROWSING_CHANNELS.pageZoom,
+  BROWSING_CHANNELS.shortcut,
   BROWSING_CHANNELS.contextOpenLink,
   BROWSING_CHANNELS.tabHistoryReset,
   PROXY_CHANNELS.status,

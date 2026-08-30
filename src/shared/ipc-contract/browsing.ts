@@ -12,6 +12,23 @@ export const BrowserUrlSchema = z.string().min(1).max(16_384)
 const SuccessSchema = z.object({ success: z.boolean() })
 const ZoomPercentSchema = z.number().int().min(PAGE_ZOOM.MIN_PERCENT).max(PAGE_ZOOM.MAX_PERCENT)
 const ZoomResultSchema = z.object({ success: z.boolean(), zoom: ZoomPercentSchema.nullable() })
+export const BrowserShortcutCommandSchema = z.discriminatedUnion('action', [
+  z.object({
+    action: z.enum([
+      'new-tab',
+      'close-tab',
+      'reopen-tab',
+      'next-tab',
+      'previous-tab',
+      'history',
+      'focus-address',
+      'back',
+      'forward',
+    ]),
+  }),
+  z.object({ action: z.literal('select-tab'), index: z.number().int().min(1).max(9) }),
+])
+export type BrowserShortcutCommand = z.infer<typeof BrowserShortcutCommandSchema>
 const base = {
   direction: 'request' as const,
   caller: 'main-renderer' as const,
@@ -104,6 +121,13 @@ export const pageZoomContract = defineEvent({
   payload: z.tuple([ZoomPercentSchema, TabIdSchema]),
   redaction: 'public',
 })
+export const browserShortcutContract = defineEvent({
+  channel: BROWSING_CHANNELS.shortcut,
+  direction: 'event',
+  recipient: 'main-renderer',
+  payload: z.tuple([BrowserShortcutCommandSchema]),
+  redaction: 'public',
+})
 export const contextOpenLinkContract = defineEvent({
   channel: BROWSING_CHANNELS.contextOpenLink,
   direction: 'event',
@@ -139,6 +163,7 @@ export const BROWSING_EVENT_CONTRACTS = [
   pageTitleContract,
   pageFaviconContract,
   pageZoomContract,
+  browserShortcutContract,
   contextOpenLinkContract,
   tabHistoryResetContract,
 ] as const

@@ -3,7 +3,8 @@ import { onWebContents, type IDisposable } from '../utils/disposable'
 import type { OverlayManager } from './overlay-manager'
 import type { TabManager, TabManagerDeps } from './tabs'
 import { setupMainContextMenu } from './main-context-menu'
-import { handleDevToolsShortcut, resolveDevToolsTarget, type WebContentsInputHandler } from './devtools'
+import { BrowserShortcutController } from './browser-shortcut-controller'
+import { PageFindController } from './page-find'
 
 export interface WindowScopeDeps {
   overlayManager: OverlayManager
@@ -13,17 +14,18 @@ export interface WindowScopeDeps {
 
 export function attachWindowScope(window: BrowserWindow, proxyPort: number, deps: WindowScopeDeps): IDisposable {
   let disposed = false
-  const handleInput: WebContentsInputHandler = (event, input) => {
-    if (deps.tabManager.pageZoom.handleInput(input)) {
-      event.preventDefault()
-      return
-    }
-    handleDevToolsShortcut(event, input, () => resolveDevToolsTarget(window, deps.tabManager.getActiveView()))
-  }
+  const shortcuts = new BrowserShortcutController(
+    window,
+    deps.tabManager,
+    new PageFindController(window, deps.tabManager, deps.overlayManager)
+  )
+  const windowInput = shortcuts.createInputHandler('window')
+  const tabInput = shortcuts.createInputHandler('tab')
+  const overlayInput = shortcuts.createInputHandler('overlay')
 
-  deps.overlayManager.attachWindow(window, handleInput)
-  deps.tabManager.attachWindow(window, proxyPort, deps.tabDeps)
-  const inputListener = onWebContents(window.webContents, 'before-input-event', handleInput)
+  deps.overlayManager.attachWindow(window, overlayInput)
+  deps.tabManager.attachWindow(window, proxyPort, deps.tabDeps, tabInput)
+  const inputListener = onWebContents(window.webContents, 'before-input-event', windowInput)
   const contextMenu = setupMainContextMenu(window, deps.overlayManager)
 
   const scope: IDisposable = {
@@ -32,6 +34,7 @@ export function attachWindowScope(window: BrowserWindow, proxyPort: number, deps
       disposed = true
       window.off('closed', onClosed)
       inputListener.dispose()
+      shortcuts.dispose()
       try {
         deps.tabManager.detachWindow(window)
       } finally {

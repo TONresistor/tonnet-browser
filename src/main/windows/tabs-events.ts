@@ -18,7 +18,7 @@ import {
 import { CONTEXT_MENU_WIDTH } from './constants'
 import { clipboard } from 'electron'
 import { DisposableStore, onWebContents } from '../utils/disposable'
-import { handleDevToolsShortcut } from './devtools'
+import type { WebContentsInputHandler } from './browser-shortcuts'
 import type { HistoryManager } from '../history/manager'
 import type { OverlayManager } from './overlay-manager'
 import type { OverlayMenuItem } from '../../shared/types'
@@ -36,7 +36,7 @@ export interface TabEventDeps {
   overlayManager: OverlayManager
   storage: TabStorageState
   cancelNavigation(tabId: string): void
-  handleZoomInput(input: Electron.Input): boolean
+  handleInput: WebContentsInputHandler
 }
 
 /** Set up non-security event listeners on a view (loading, navigation, favicon, context menu). */
@@ -45,15 +45,7 @@ export function setupViewEventListeners(view: WebContentsView, tabId: string, de
 
   const store = new DisposableStore()
 
-  store.add(
-    onWebContents(view.webContents, 'before-input-event', (event: Electron.Event, input: Electron.Input) => {
-      if (deps.handleZoomInput(input)) {
-        event.preventDefault()
-        return
-      }
-      handleDevToolsShortcut(event, input, () => view.webContents)
-    })
-  )
+  store.add(onWebContents(view.webContents, 'before-input-event', deps.handleInput))
 
   store.add(
     onWebContents(view.webContents, 'did-start-loading', () => {

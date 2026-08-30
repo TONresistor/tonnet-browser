@@ -13,15 +13,16 @@ import {
 } from '../../shared/ipc-contract/overlay'
 import { createLogger } from '../../shared/logger'
 import { onWebContents, type IDisposable } from '../utils/disposable'
-import type { WebContentsInputHandler } from './devtools'
+import type { WebContentsInputHandler } from './browser-shortcuts'
 
 const log = createLogger('overlay')
 
 type OverlayActionHandler = (actionType: string, actionData: unknown) => void
 
 interface OverlayOptions {
-  /** If true (default), overlay auto-dismisses on blur (click outside). Set false for suggestion-style overlays. */
   autoDismiss?: boolean
+  focus?: boolean
+  persistentActions?: boolean
 }
 
 interface OverlayInstance {
@@ -30,6 +31,7 @@ interface OverlayInstance {
   onAction?: OverlayActionHandler
   handlesActions: boolean
   autoDismiss: boolean
+  persistentActions: boolean
 }
 
 interface OverlayBounds {
@@ -99,6 +101,8 @@ export class OverlayManager {
   ): boolean {
     if (!this.mainWindow) return false
     const autoDismiss = options?.autoDismiss !== false
+    const shouldFocus = options?.focus ?? autoDismiss
+    const persistentActions = options?.persistentActions === true
 
     // Reuse existing overlay with same id (transitions like menu -> form)
     const existing = this.active.get(id)
@@ -108,6 +112,7 @@ export class OverlayManager {
       existing.view.webContents.send(overlayContentEventContract.channel, ...payload)
       existing.onAction = onAction
       existing.handlesActions = Boolean(onAction)
+      existing.persistentActions = persistentActions
       if (existing.autoDismiss !== autoDismiss) {
         this.clickOutsideHandlers.get(id)?.()
         this.clickOutsideHandlers.delete(id)
@@ -119,7 +124,7 @@ export class OverlayManager {
       } catch {
         // Already attached
       }
-      if (autoDismiss) existing.view.webContents.focus()
+      if (shouldFocus) existing.view.webContents.focus()
       return true
     }
 
@@ -135,12 +140,17 @@ export class OverlayManager {
     const contentPayload = overlayContentEventContract.payload.parse([content])
     view.webContents.send(overlayContentEventContract.channel, ...contentPayload)
 
-    this.active.set(id, { view, id, onAction, handlesActions: Boolean(onAction), autoDismiss })
+    this.active.set(id, {
+      view,
+      id,
+      onAction,
+      handlesActions: Boolean(onAction),
+      autoDismiss,
+      persistentActions,
+    })
 
-    if (autoDismiss) {
-      view.webContents.focus()
-      this.setupClickOutside(id)
-    }
+    if (shouldFocus) view.webContents.focus()
+    if (autoDismiss) this.setupClickOutside(id)
 
     log.debug(`Overlay shown: ${id}`)
     return true
@@ -258,7 +268,7 @@ export class OverlayManager {
     for (const [, instance] of this.active) {
       if (instance.view.webContents === sender && instance.onAction) {
         const handler = instance.onAction
-        instance.onAction = undefined
+        if (!instance.persistentActions) instance.onAction = undefined
         try {
           handler(actionType, actionData)
         } catch (error) {

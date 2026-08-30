@@ -82,6 +82,80 @@ function renderMenu(items) {
   }
 }
 
+function renderFind(content) {
+  currentItems = []
+  selectedIndex = -1
+  root.className = 'find-mode'
+
+  let container = root.querySelector('.find-container')
+  let input = container?.querySelector('.find-input')
+  let count = container?.querySelector('.find-count')
+  let previous = container?.querySelector('[data-action="previous"]')
+  let next = container?.querySelector('[data-action="next"]')
+
+  if (!container || !input || !count || !previous || !next) {
+    root.innerHTML = ''
+    container = document.createElement('div')
+    container.className = 'find-container'
+
+    input = document.createElement('input')
+    input.className = 'find-input'
+    input.type = 'text'
+    input.placeholder = 'Find in page'
+    input.setAttribute('aria-label', 'Find in page')
+    input.addEventListener('input', () => window.overlayBridge.sendAction('query', { query: input.value }))
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault()
+        event.stopPropagation()
+        window.overlayBridge.sendAction(event.shiftKey ? 'previous' : 'next', {})
+      } else if (event.key === 'Escape') {
+        event.preventDefault()
+        event.stopPropagation()
+        window.overlayBridge.sendAction('close', {})
+      }
+    })
+
+    count = document.createElement('span')
+    count.className = 'find-count'
+
+    const makeButton = (action, label, text) => {
+      const button = document.createElement('button')
+      button.className = 'find-button'
+      button.type = 'button'
+      button.dataset.action = action
+      button.title = label
+      button.setAttribute('aria-label', label)
+      button.textContent = text
+      button.addEventListener('mousedown', (event) => event.preventDefault())
+      button.addEventListener('click', () => window.overlayBridge.sendAction(action, {}))
+      return button
+    }
+
+    previous = makeButton('previous', 'Previous match', '↑')
+    next = makeButton('next', 'Next match', '↓')
+    const close = makeButton('close', 'Close', '×')
+
+    container.appendChild(input)
+    container.appendChild(count)
+    container.appendChild(previous)
+    container.appendChild(next)
+    container.appendChild(close)
+    root.appendChild(container)
+  }
+
+  const query = typeof content.query === 'string' ? content.query : ''
+  if (document.activeElement !== input && input.value !== query) input.value = query
+  const matches = Number.isInteger(content.matches) ? content.matches : 0
+  const activeMatch = Number.isInteger(content.activeMatch) ? content.activeMatch : 0
+  count.textContent = query ? `${activeMatch}/${matches}` : ''
+  previous.disabled = !query
+  next.disabled = !query
+
+  input.focus()
+  if (content.selectAll) input.select()
+}
+
 function renderForm(content) {
   currentItems = []
   selectedIndex = -1
@@ -306,6 +380,8 @@ window.overlayBridge.onContent((content) => {
     }
   } else if (content.type === 'menu' && content.items) {
     renderMenu(content.items)
+  } else if (content.type === 'find') {
+    renderFind(content)
   } else if (content.type === 'form') {
     renderForm(content)
   } else if (content.type === 'approval') {

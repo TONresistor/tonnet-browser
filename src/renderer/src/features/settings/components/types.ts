@@ -39,11 +39,3 @@ export interface SectionInfo {
   /** Index of the grouped inset block this section belongs to */
   group: number
 }
-
-/**
- * Définition d'un raccourci clavier
- */
-export interface Shortcut {
-  action: string
-  shortcut: string
-}

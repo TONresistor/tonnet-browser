@@ -1,7 +1,5 @@
 import type { BrowserWindow, WebContents, WebContentsView } from 'electron'
 
-export type WebContentsInputHandler = (event: Electron.Event, input: Electron.Input) => void
-
 export function isDevToolsShortcut(input: Electron.Input, platform: NodeJS.Platform = process.platform): boolean {
   if (input.type !== 'keyDown' || input.isAutoRepeat || input.isComposing) return false
 
@@ -24,19 +22,6 @@ export function toggleDevTools(contents: WebContents): boolean {
   } catch {
     return false
   }
-}
-
-export function handleDevToolsShortcut(
-  event: Electron.Event,
-  input: Electron.Input,
-  resolveTarget: () => WebContents | null,
-  platform: NodeJS.Platform = process.platform
-): boolean {
-  if (!isDevToolsShortcut(input, platform)) return false
-  event.preventDefault()
-  const target = resolveTarget()
-  if (target) toggleDevTools(target)
-  return true
 }
 
 export function resolveDevToolsTarget(window: BrowserWindow, activeView: WebContentsView | null): WebContents {

@@ -408,8 +408,7 @@ export const useTabsStore = create<TabsState>((set, get) => ({
 
   goToTabByIndex: async (index: number) => {
     const { tabs, setActiveTab } = get()
-    // Index is 1-based (Ctrl+1 to Ctrl+9)
-    const tabIndex = index - 1
+    const tabIndex = index === 9 ? tabs.length - 1 : index - 1
     if (tabIndex >= 0 && tabIndex < tabs.length) {
       await setActiveTab(tabs[tabIndex].id)
     }

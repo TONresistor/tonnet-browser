@@ -145,6 +145,67 @@
       color: #ff453a;
     }
 
+    #root.find-mode {
+      border-radius: 12px;
+      overflow: hidden;
+    }
+
+    .find-container {
+      height: 46px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 8px 6px 12px;
+    }
+
+    .find-input {
+      min-width: 0;
+      flex: 1;
+      border: 0;
+      outline: 0;
+      background: transparent;
+      color: var(--text);
+      font: inherit;
+      user-select: text;
+      -webkit-user-select: text;
+    }
+
+    .find-input::placeholder {
+      color: var(--text-muted);
+    }
+
+    .find-count {
+      min-width: 42px;
+      color: var(--text-secondary);
+      font-size: 11px;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .find-button {
+      width: 28px;
+      height: 28px;
+      display: grid;
+      place-items: center;
+      border: 0;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--text-secondary);
+      font: inherit;
+      font-size: 16px;
+      cursor: pointer;
+    }
+
+    .find-button:hover {
+      background: var(--surface-hover);
+      color: var(--text);
+    }
+
+    .find-button:disabled {
+      opacity: 0.35;
+      cursor: default;
+    }
+
     /* Form */
     .form-container {
       padding: 20px;

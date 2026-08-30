@@ -34,6 +34,7 @@ import { attachViewWhenReady } from './tabs-attach'
 import { rebuildViewsForIsolation, safeDetach, setupViewEvents } from './tabs-view-lifecycle'
 import { loadBagFileFor, loadStorageBagFor } from './tabs-storage-navigation'
 import { PageZoomController } from './page-zoom'
+import type { WebContentsInputHandler } from './browser-shortcuts'
 
 const log = createLogger('tabs')
 
@@ -94,7 +95,12 @@ export class TabManager {
     return this.pageZoom.defaultZoom
   }
 
-  attachWindow(win: BrowserWindow, port: number, deps: TabManagerDeps): void {
+  attachWindow(
+    win: BrowserWindow,
+    port: number,
+    deps: TabManagerDeps,
+    handleInput: WebContentsInputHandler = () => undefined
+  ): void {
     this.detachWindow()
     this.windowGeneration += 1
     this.mainWindow = win
@@ -107,7 +113,7 @@ export class TabManager {
       overlayManager: deps.overlayManager,
       storage: this.storage,
       cancelNavigation: (tabId) => this.cancelNavigation(tabId),
-      handleZoomInput: (input) => this.pageZoom.handleInput(input),
+      handleInput,
     }
     this.sessions.initialize({
       paymentInterceptor: deps.paymentInterceptor,
@@ -258,6 +264,23 @@ export class TabManager {
 
   getActiveTabId(): string | null {
     return this.activeTabId
+  }
+
+  reloadActivePage(ignoreCache: boolean): boolean {
+    const view = this.getActiveView()
+    if (!view || view.webContents.isDestroyed()) return false
+    if (this.activeTabId) this.cancelNavigation(this.activeTabId)
+    if (ignoreCache) view.webContents.reloadIgnoringCache()
+    else view.webContents.reload()
+    return true
+  }
+
+  stopActivePage(): boolean {
+    const view = this.getActiveView()
+    if (!view || view.webContents.isDestroyed()) return false
+    if (this.activeTabId) this.cancelNavigation(this.activeTabId)
+    view.webContents.stop()
+    return true
   }
 
   resolveSenderIdentity(sender: Electron.WebContents): string | null {

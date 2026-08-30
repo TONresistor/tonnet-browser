@@ -50,23 +50,6 @@ export class PageZoomController {
     return this.set(this.defaultZoomPercent) !== null
   }
 
-  handleInput(input: Electron.Input): boolean {
-    if (process.platform === 'darwin' || input.type !== 'keyDown' || !input.control || input.alt) return false
-    if (input.key === '+' || input.key === '=') {
-      this.zoomIn()
-      return true
-    }
-    if (input.key === '-') {
-      this.zoomOut()
-      return true
-    }
-    if (input.key === '0') {
-      this.reset()
-      return true
-    }
-    return false
-  }
-
   emit(zoom = this.get()): void {
     const tabId = this.getActiveTabId()
     if (tabId && zoom !== null) this.onChange(zoom, tabId)

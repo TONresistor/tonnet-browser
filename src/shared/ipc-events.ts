@@ -7,6 +7,7 @@ import type {
   StorageBag,
 } from './types'
 import type { CocoonState, CocoonLogEvent, WithdrawDriverEvent, RecoveryDriverEvent } from './cocoon-types'
+import type { BrowserShortcutCommand } from './ipc-contract/browsing'
 
 export interface ProxyStatusEvent extends Partial<ProxyStatus> {
   status?: string
@@ -34,6 +35,7 @@ export interface IpcEventMap {
   'page:title': [title: string, tabId: string]
   'page:favicon': [favicon: string, tabId: string]
   'page:zoom': [zoom: number, tabId: string]
+  'browser:shortcut': [command: BrowserShortcutCommand]
   'proxy:status': [status: ProxyStatusEvent]
   'proxy:progress': [progress: { step: number; message: string }]
   'proxy:auto-connect': []

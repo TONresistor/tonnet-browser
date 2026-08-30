@@ -463,6 +463,19 @@ describe('tabs store', () => {
     })
   })
 
+  describe('goToTabByIndex', () => {
+    it('uses shortcut 9 for the last tab', async () => {
+      await useTabsStore.getState().addTab('http://first.ton')
+      await useTabsStore.getState().addTab('http://second.ton')
+      await useTabsStore.getState().addTab('http://last.ton')
+
+      await useTabsStore.getState().goToTabByIndex(9)
+
+      const { tabs, activeTabId } = useTabsStore.getState()
+      expect(activeTabId).toBe(tabs.at(-1)?.id)
+    })
+  })
+
   describe('reorderTabs', () => {
     it('reorders tabs by moving a tab to a new index', async () => {
       await useTabsStore.getState().addTab('http://a.ton')

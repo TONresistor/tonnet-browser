@@ -151,6 +151,28 @@ describe('OverlayManager window lifecycle', () => {
     expect(callback).toHaveBeenCalledWith('approve', {})
   })
 
+  it('keeps persistent callbacks active until the overlay closes', () => {
+    const window = new WindowMock()
+    const manager = new OverlayManager()
+    const callback = vi.fn()
+    manager.attachWindow(window as never, vi.fn())
+    manager.show('find', { x: 0, y: 0, width: 10, height: 10 }, { type: 'find' }, callback, {
+      autoDismiss: false,
+      persistentActions: true,
+    })
+    const view = state.views.at(-1)!
+
+    expect(manager.handleAction(view.webContents as never, 'query', { query: 'ton' })).toBe(true)
+    expect(manager.handleAction(view.webContents as never, 'next', {})).toBe(true)
+    manager.hideAll()
+
+    expect(callback.mock.calls).toEqual([
+      ['query', { query: 'ton' }],
+      ['next', {}],
+      ['dismiss', {}],
+    ])
+  })
+
   it('forwards input from pooled and on-demand views and removes every listener on detach', () => {
     const window = new WindowMock()
     const manager = new OverlayManager()

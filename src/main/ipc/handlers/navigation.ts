@@ -103,25 +103,11 @@ export function registerNavigationHandlers(tabManager: TabManager): void {
   })
 
   secureContractHandle(reloadContract, () => {
-    const view = tabManager.getActiveView()
-    if (view) {
-      const tabId = tabManager.getActiveTabId()
-      if (tabId) tabManager.cancelNavigation(tabId)
-      view.webContents.reload()
-      return { success: true }
-    }
-    return { success: false }
+    return { success: tabManager.reloadActivePage(false) }
   })
 
   secureContractHandle(stopContract, () => {
-    const view = tabManager.getActiveView()
-    if (view) {
-      const tabId = tabManager.getActiveTabId()
-      if (tabId) tabManager.cancelNavigation(tabId)
-      view.webContents.stop()
-      return { success: true }
-    }
-    return { success: false }
+    return { success: tabManager.stopActivePage() }
   })
 
   secureContractHandle(zoomGetContract, () => {

@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events'
 import { describe, expect, it, vi } from 'vitest'
-import { handleDevToolsShortcut, isDevToolsShortcut, resolveDevToolsTarget, toggleDevTools } from '../devtools'
+import { isDevToolsShortcut, resolveDevToolsTarget, toggleDevTools } from '../devtools'
 
 function keyDown(overrides: Partial<Electron.Input> = {}): Electron.Input {
   return {
@@ -59,18 +59,6 @@ describe('DevTools target and toggle', () => {
     const open = stubContents(true)
     toggleDevTools(open as never)
     expect(open.closeDevTools).toHaveBeenCalledOnce()
-  })
-
-  it('consumes a shortcut once and ignores a destroyed target', () => {
-    const target = stubContents()
-    target.isDestroyed.mockReturnValue(true)
-    const event = { preventDefault: vi.fn() }
-
-    expect(
-      handleDevToolsShortcut(event as never, keyDown({ code: 'F12', key: 'F12' }), () => target as never, 'linux')
-    ).toBe(true)
-    expect(event.preventDefault).toHaveBeenCalledOnce()
-    expect(target.openDevTools).not.toHaveBeenCalled()
   })
 
   it('targets only an active tab view that is attached and alive', () => {
