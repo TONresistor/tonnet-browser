@@ -1,6 +1,6 @@
 import { ActionButton } from '@/components/ui/ios/ActionButton'
+import { SecureLockIcon } from '@/components/ui/SecureLockIcon'
 import { WalletPasswordFields } from './WalletPasswordFields'
-import { EncryptedIcon } from './EncryptedIcon'
 import { useEffect, useRef } from 'react'
 
 type SecurityMode = 'setup' | 'unlock' | 'backup'
@@ -83,7 +83,7 @@ export function WalletSecurityScreen({
           type="submit"
           variant="filled"
           className="w-full"
-          icon={showPassword ? <EncryptedIcon className="h-4 w-4" /> : undefined}
+          icon={showPassword ? <SecureLockIcon className="h-4 w-4" /> : undefined}
         >
           {copy.action}
         </ActionButton>

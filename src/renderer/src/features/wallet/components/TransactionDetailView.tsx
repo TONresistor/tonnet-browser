@@ -7,7 +7,7 @@ import { AddressChip } from '@/components/ui/ios/AddressChip'
 import { useTranslation } from 'react-i18next'
 import type { WalletTransaction } from '@shared/types'
 import type { ReactNode } from 'react'
-import { EncryptedIcon } from '@/features/wallet/components/EncryptedIcon'
+import { SecureLockIcon } from '@/components/ui/SecureLockIcon'
 
 interface TransactionDetailViewProps {
   transaction: WalletTransaction
@@ -112,7 +112,7 @@ export function TransactionDetailView({
           {transaction.commentEncrypted && (
             <DetailRow label={t('detail.privacy', { defaultValue: 'Privacy' })} compact={compact}>
               <span className="inline-flex items-center gap-1">
-                <EncryptedIcon className="h-3.5 w-3.5" />
+                <SecureLockIcon className="h-3.5 w-3.5" />
                 {t('send.encryptedLabel')}
               </span>
             </DetailRow>

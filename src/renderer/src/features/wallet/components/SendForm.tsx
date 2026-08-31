@@ -16,7 +16,7 @@ import { isValidTonAddress, isValidRecipientInput, TX_FEE_RESERVE_NANO, utf8Byte
 import { useTranslation } from 'react-i18next'
 import { Toggle } from '@/features/settings/components/shared/Toggle'
 import { SendActionIcon } from '@/features/wallet/components/SendActionIcon'
-import { EncryptedIcon } from '@/features/wallet/components/EncryptedIcon'
+import { SecureLockIcon } from '@/components/ui/SecureLockIcon'
 
 type ResolveState =
   | { status: 'idle' }
@@ -181,7 +181,7 @@ export const SendForm = memo(function SendForm({ onSend, isSending, error, balan
               <div className="flex justify-between gap-3">
                 <span className="text-muted-foreground shrink-0">{t('send.privacy')}</span>
                 <span className="inline-flex items-center gap-1 text-xs text-foreground">
-                  <EncryptedIcon className="h-3 w-3" />
+                  <SecureLockIcon className="h-3 w-3" />
                   {t('send.encryptedLabel')}
                 </span>
               </div>

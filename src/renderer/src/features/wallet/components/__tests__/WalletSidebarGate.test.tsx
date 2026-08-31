@@ -54,7 +54,7 @@ describe('WalletSidebarGate', () => {
     const error = container.querySelector('[role="alert"]')
     expect(form).not.toBeNull()
     expect(unlockButton?.type).toBe('submit')
-    expect(unlockButton?.querySelector('[data-wallet-icon="encrypted"]')).not.toBeNull()
+    expect(unlockButton?.querySelector('[data-ui-icon="secure-lock"]')).not.toBeNull()
     expect(error).not.toBeNull()
     if (!form || !unlockButton || !error) throw new Error('Expected unlock form, submit button, and error message')
     expect(unlockButton.compareDocumentPosition(error) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()

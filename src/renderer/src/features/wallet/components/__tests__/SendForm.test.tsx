@@ -61,7 +61,7 @@ describe('SendForm encrypted comment', () => {
     )
     await act(async () => review?.click())
     expect(container.textContent).toContain('send.privacy')
-    expect(container.querySelector('[data-wallet-icon="encrypted"]')).not.toBeNull()
+    expect(container.querySelector('[data-ui-icon="secure-lock"]')).not.toBeNull()
 
     const confirm = Array.from(container.querySelectorAll('button')).find(
       (button) => button.textContent?.trim() === 'send.confirm'

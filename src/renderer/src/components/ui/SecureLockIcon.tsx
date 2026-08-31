@@ -1,20 +1,20 @@
-import encryptedIcon from '@/assets/telegram-lockedstickers.svg'
+import secureLockIcon from '@/assets/telegram-lockedstickers.svg'
 import { cn } from '@/lib/utils'
 
-interface EncryptedIconProps {
+interface SecureLockIconProps {
   className?: string
 }
 
-export function EncryptedIcon({ className }: EncryptedIconProps): React.JSX.Element {
+export function SecureLockIcon({ className }: SecureLockIconProps): React.JSX.Element {
   return (
     <span
       aria-hidden="true"
-      data-wallet-icon="encrypted"
+      data-ui-icon="secure-lock"
       className={cn('inline-block shrink-0', className)}
       style={{
         backgroundColor: 'currentColor',
-        maskImage: `url("${encryptedIcon}")`,
-        WebkitMaskImage: `url("${encryptedIcon}")`,
+        maskImage: `url("${secureLockIcon}")`,
+        WebkitMaskImage: `url("${secureLockIcon}")`,
         maskPosition: 'center',
         WebkitMaskPosition: 'center',
         maskRepeat: 'no-repeat',

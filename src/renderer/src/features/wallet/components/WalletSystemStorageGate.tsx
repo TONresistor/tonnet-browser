@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { ActionButton } from '@/components/ui/ios/ActionButton'
 import { walletClient } from '@/features/wallet/client'
 import { errorMessage } from '@shared/errors'
-import { EncryptedIcon } from './EncryptedIcon'
+import { SecureLockIcon } from '@/components/ui/SecureLockIcon'
 
 type WalletSystemStorageGateVariant = 'page' | 'sidebar' | 'settings'
 
@@ -41,7 +41,7 @@ export function WalletSystemStorageGate({
   const prompt = (
     <div className="w-full space-y-4 text-center">
       <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-muted text-icon">
-        <EncryptedIcon className="h-5 w-5" />
+        <SecureLockIcon className="h-5 w-5" />
       </div>
       <div>
         <h2 className="text-sm font-semibold text-heading">
@@ -64,7 +64,7 @@ export function WalletSystemStorageGate({
         variant="filled"
         className="w-full"
         disabled={pending}
-        icon={<EncryptedIcon className="h-4 w-4" />}
+        icon={<SecureLockIcon className="h-4 w-4" />}
         onClick={() => void handleRetry()}
       >
         {pending

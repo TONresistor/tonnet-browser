@@ -5,9 +5,10 @@
  */
 
 import { useState, useEffect, FormEvent, useRef, useMemo, memo, useCallback } from 'react'
-import { Lock, Star, LoaderCircle } from 'lucide-react'
+import { Star, LoaderCircle } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
+import { SecureLockIcon } from '@/components/ui/SecureLockIcon'
 import { useBrowserStore } from '@/stores/browser'
 import { useBookmarksStore } from '@/features/bookmarks/store'
 import { useTabsStore } from '@/stores/tabs'
@@ -313,7 +314,7 @@ export const AddressBar = memo(function AddressBar() {
               className="absolute left-1.5 top-1/2 -translate-y-1/2 z-10 flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full bg-primary text-identity-foreground"
               aria-hidden="true"
             >
-              <Lock className="h-3 w-3" />
+              <SecureLockIcon className="h-3 w-3" />
               <span>tonsite://</span>
             </div>
           ) : (

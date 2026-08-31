@@ -40,7 +40,7 @@ describe('WalletSecurityScreen', () => {
     const error = container.querySelector('[role="alert"]')
     expect(form).not.toBeNull()
     expect(button).not.toBeNull()
-    expect(button?.querySelector('[data-wallet-icon="encrypted"]')).not.toBeNull()
+    expect(button?.querySelector('[data-ui-icon="secure-lock"]')).not.toBeNull()
     expect(error).not.toBeNull()
     if (!form || !button || !error) throw new Error('Expected unlock form, submit button, and error message')
     expect(button.compareDocumentPosition(error) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()

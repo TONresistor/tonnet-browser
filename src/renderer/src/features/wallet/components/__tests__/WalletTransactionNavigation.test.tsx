@@ -150,7 +150,7 @@ describe('wallet transaction navigation', () => {
     await act(async () => root.render(<WalletPage />))
 
     const lockButton = container.querySelector('button[aria-label="Lock wallet"]')
-    expect(lockButton?.querySelector('[data-wallet-icon="encrypted"]')).not.toBeNull()
+    expect(lockButton?.querySelector('[data-ui-icon="secure-lock"]')).not.toBeNull()
   })
 
   it('returns to the sidebar overview when the selected transaction disappears', async () => {

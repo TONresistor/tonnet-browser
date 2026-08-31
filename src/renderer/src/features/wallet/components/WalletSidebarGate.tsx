@@ -4,7 +4,7 @@ import { AppIcon } from '@/components/ui/AppIcon'
 import { Button } from '@/components/ui/button'
 import { ActionButton } from '@/components/ui/ios/ActionButton'
 import { WalletPasswordFields } from './WalletPasswordFields'
-import { EncryptedIcon } from './EncryptedIcon'
+import { SecureLockIcon } from '@/components/ui/SecureLockIcon'
 import { useEffect, useRef } from 'react'
 
 type SidebarGateMode = 'unlock' | 'setup' | 'backup'
@@ -101,7 +101,7 @@ export function WalletSidebarGate({
                 variant="filled"
                 className="w-full"
                 disabled={!ready || pending}
-                icon={<EncryptedIcon className="h-4 w-4" />}
+                icon={<SecureLockIcon className="h-4 w-4" />}
               >
                 {pending ? 'Please wait…' : copy.action}
               </ActionButton>

@@ -92,6 +92,6 @@ describe('TransactionDetailView', () => {
       )
     })
 
-    expect(container.querySelector('[data-wallet-icon="encrypted"]')).not.toBeNull()
+    expect(container.querySelector('[data-ui-icon="secure-lock"]')).not.toBeNull()
   })
 })

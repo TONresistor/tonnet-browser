@@ -35,7 +35,7 @@ import { WalletRecoveryScreen } from './WalletRecoveryScreen'
 import { walletClient } from '@/features/wallet/client'
 import { WalletBackupPhraseScreen } from './WalletBackupPhraseScreen'
 import { WalletForgotPasswordScreen } from './WalletForgotPasswordScreen'
-import { EncryptedIcon } from './EncryptedIcon'
+import { SecureLockIcon } from '@/components/ui/SecureLockIcon'
 import { WalletSystemStorageGate } from './WalletSystemStorageGate'
 import { useNavigateActiveBrowserTab } from '@/features/browser/navigation'
 
@@ -508,7 +508,7 @@ export function WalletPage() {
                   title="Lock wallet"
                   aria-label="Lock wallet"
                 >
-                  <EncryptedIcon className="h-3.5 w-3.5" />
+                  <SecureLockIcon className="h-3.5 w-3.5" />
                 </Button>
               )}
             </div>
