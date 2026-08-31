@@ -961,7 +961,17 @@ describe('IPC Handlers', () => {
       expect(mockRegistry.overlayManager.show).toHaveBeenCalledWith(
         expect.stringContaining('wallet-transfer-'),
         expect.any(Object),
-        expect.objectContaining({ title: 'Confirm wallet transfer', amount: '0.00000001 GRAM' }),
+        expect.objectContaining({
+          title: 'Confirm wallet transfer',
+          amount: '0.00000001 GRAM',
+          rows: expect.arrayContaining([
+            expect.objectContaining({
+              label: 'Memo',
+              value: '',
+              action: expect.objectContaining({ id: 'set-memo', label: 'Edit', editable: true }),
+            }),
+          ]),
+        }),
         expect.any(Function),
         { autoDismiss: false }
       )
@@ -970,6 +980,127 @@ describe('IPC Handlers', () => {
         '10',
         undefined,
         expect.objectContaining({ publicKey: expect.any(String), addressRaw: expect.any(String) })
+      )
+    })
+
+    it('revalidates an edited memo before showing the final approval', async () => {
+      vi.mocked(mockRegistry.walletManager.getState).mockReturnValue({
+        isCreated: true,
+        isLocked: false,
+        needsPasswordSetup: false,
+        backupVerified: true,
+      } as never)
+      vi.mocked(mockRegistry.tonBridgeProviders.wallet.getBridge).mockReturnValue({} as never)
+      vi.mocked(mockRegistry.walletManager.resolveRecipient).mockResolvedValue({ address: 'EQRecipient' })
+      vi.mocked(mockRegistry.walletManager.send).mockResolvedValue({
+        id: 'tx-with-memo',
+        type: 'send',
+        amount: '10',
+        address: 'EQRecipient',
+        timestamp: 1,
+        status: 'pending',
+      })
+
+      let approvalCount = 0
+      vi.mocked(mockRegistry.overlayManager.show).mockImplementation((_id, _bounds, _content, callback) => {
+        if (approvalCount++ === 0) callback?.('set-memo', { memo: 'Thanks' })
+        else callback?.('approve', {})
+        return true
+      })
+
+      const handler = mockHandlers.get(IPC_CHANNELS.WALLET_SEND)!
+      await expect(handler(createMockEvent(), 'EQRecipient', '10')).resolves.toMatchObject({ id: 'tx-with-memo' })
+
+      expect(mockRegistry.walletManager.preflightTransfer).toHaveBeenNthCalledWith(
+        1,
+        'EQRecipient',
+        '10',
+        undefined,
+        expect.any(Object),
+        undefined
+      )
+      expect(mockRegistry.walletManager.preflightTransfer).toHaveBeenNthCalledWith(
+        2,
+        'EQRecipient',
+        '10',
+        'Thanks',
+        expect.any(Object),
+        undefined
+      )
+      expect(mockRegistry.walletManager.send).toHaveBeenCalledWith('EQRecipient', '10', 'Thanks', expect.any(Object))
+      const approvalIds = vi.mocked(mockRegistry.overlayManager.show).mock.calls.map(([id]) => id)
+      expect(new Set(approvalIds).size).toBe(1)
+      expect(mockRegistry.overlayManager.show).toHaveBeenLastCalledWith(
+        expect.stringContaining('wallet-transfer-'),
+        expect.any(Object),
+        expect.objectContaining({
+          rows: expect.arrayContaining([{ label: 'Encrypted', toggle: { id: 'set-encryption', checked: false } }]),
+        }),
+        expect.any(Function),
+        { autoDismiss: false }
+      )
+    })
+
+    it('revalidates a memo after encryption is enabled from the approval', async () => {
+      const encryptedBody = beginCell().storeUint(0x2167da4b, 32).endCell()
+      vi.mocked(mockRegistry.walletManager.getState).mockReturnValue({
+        isCreated: true,
+        isLocked: false,
+        needsPasswordSetup: false,
+        backupVerified: true,
+      } as never)
+      vi.mocked(mockRegistry.tonBridgeProviders.wallet.getBridge).mockReturnValue({} as never)
+      vi.mocked(mockRegistry.walletManager.resolveRecipient).mockResolvedValue({ address: 'EQRecipient' })
+      vi.mocked(mockRegistry.walletManager.prepareEncryptedComment).mockResolvedValue(encryptedBody)
+      vi.mocked(mockRegistry.walletManager.send).mockResolvedValue({
+        id: 'tx-encrypted-from-approval',
+        type: 'send',
+        amount: '10',
+        address: 'EQRecipient',
+        timestamp: 1,
+        status: 'pending',
+      })
+
+      let reviewCount = 0
+      vi.mocked(mockRegistry.overlayManager.show).mockImplementation((_id, _bounds, _content, callback) => {
+        if (reviewCount++ === 0) callback?.('set-encryption', { enabled: true })
+        else callback?.('approve', {})
+        return true
+      })
+
+      const handler = mockHandlers.get(IPC_CHANNELS.WALLET_SEND)!
+      await expect(handler(createMockEvent(), 'EQRecipient', '10', 'Thanks')).resolves.toMatchObject({
+        id: 'tx-encrypted-from-approval',
+      })
+
+      expect(mockRegistry.walletManager.prepareEncryptedComment).toHaveBeenCalledWith(
+        'EQRecipient',
+        'Thanks',
+        expect.any(Object)
+      )
+      expect(mockRegistry.walletManager.preflightTransfer).toHaveBeenLastCalledWith(
+        'EQRecipient',
+        '10',
+        'Thanks',
+        expect.any(Object),
+        encryptedBody
+      )
+      expect(mockRegistry.walletManager.send).toHaveBeenCalledWith(
+        'EQRecipient',
+        '10',
+        'Thanks',
+        expect.any(Object),
+        encryptedBody,
+        true
+      )
+      expect(mockRegistry.overlayManager.show).toHaveBeenLastCalledWith(
+        expect.stringContaining('wallet-transfer-'),
+        expect.any(Object),
+        expect.objectContaining({
+          rows: expect.arrayContaining([{ label: 'Encrypted', toggle: { id: 'set-encryption', checked: true } }]),
+        }),
+        expect.any(Function),
+        { autoDismiss: false }
       )
     })
 
@@ -1028,7 +1159,9 @@ describe('IPC Handlers', () => {
       expect(mockRegistry.overlayManager.show).toHaveBeenCalledWith(
         expect.stringContaining('wallet-transfer-'),
         expect.any(Object),
-        expect.objectContaining({ rows: expect.arrayContaining([{ label: 'Privacy', value: 'Encrypted comment' }]) }),
+        expect.objectContaining({
+          rows: expect.arrayContaining([{ label: 'Encrypted', toggle: { id: 'set-encryption', checked: true } }]),
+        }),
         expect.any(Function),
         { autoDismiss: false }
       )

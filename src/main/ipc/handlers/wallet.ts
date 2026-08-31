@@ -175,37 +175,75 @@ export function registerWalletHandlers(registry: ServiceRegistry): void {
         domainFailure ? error : undefined
       )
     }
+    let effectiveComment = comment
+    let effectiveEncrypted = encryptedComment && Boolean(comment)
     let commentBody: Awaited<ReturnType<typeof walletManager.prepareEncryptedComment>> | undefined
-    if (encryptedComment && comment) {
-      try {
-        commentBody = await walletManager.prepareEncryptedComment(resolved.address, comment, walletIdentity)
-      } catch (error) {
-        ipcFailure('ENCRYPTED_COMMENT_UNAVAILABLE', 'Recipient does not support encrypted comments', false, error)
-      }
-    }
-    let preflight: Awaited<ReturnType<typeof walletManager.preflightTransfer>>
+    const approvalId = `wallet-transfer-${crypto.randomUUID()}`
+
     try {
-      preflight = await walletManager.preflightTransfer(resolved.address, amount, comment, walletIdentity, commentBody)
-    } catch (error) {
-      ipcFailure('TRANSFER_PREFLIGHT_FAILED', 'Unable to verify transaction fees and recipient', true, error)
+      for (;;) {
+        commentBody = undefined
+        if (effectiveEncrypted && effectiveComment) {
+          try {
+            commentBody = await walletManager.prepareEncryptedComment(
+              resolved.address,
+              effectiveComment,
+              walletIdentity
+            )
+          } catch (error) {
+            ipcFailure('ENCRYPTED_COMMENT_UNAVAILABLE', 'Recipient does not support encrypted comments', false, error)
+          }
+        }
+
+        let preflight: Awaited<ReturnType<typeof walletManager.preflightTransfer>>
+        try {
+          preflight = await walletManager.preflightTransfer(
+            resolved.address,
+            amount,
+            effectiveComment,
+            walletIdentity,
+            commentBody
+          )
+        } catch (error) {
+          ipcFailure('TRANSFER_PREFLIGHT_FAILED', 'Unable to verify transaction fees and recipient', true, error)
+        }
+        if (BigInt(amount) + BigInt(preflight.estimatedFee) > BigInt(preflight.walletBalance)) {
+          ipcFailure('INSUFFICIENT_BALANCE', 'Insufficient balance')
+        }
+
+        const approval = await requestWalletTransferApproval(
+          overlayManager,
+          {
+            address: resolved.address,
+            amount,
+            domain: resolved.domain,
+            comment: effectiveComment,
+            commentEncrypted: Boolean(commentBody),
+            estimatedFee: preflight.estimatedFee,
+          },
+          approvalId
+        )
+        if (approval.action === 'set-memo') {
+          effectiveComment = approval.comment
+          if (!effectiveComment) effectiveEncrypted = false
+          continue
+        }
+        if (approval.action === 'set-encryption') {
+          effectiveEncrypted = approval.encrypted
+          continue
+        }
+        if (approval.action !== 'approve') ipcFailure('USER_CANCELLED', 'Transfer cancelled')
+        break
+      }
+    } finally {
+      overlayManager.hide(approvalId)
     }
-    if (BigInt(amount) + BigInt(preflight.estimatedFee) > BigInt(preflight.walletBalance)) {
-      ipcFailure('INSUFFICIENT_BALANCE', 'Insufficient balance')
-    }
-    const approved = await requestWalletTransferApproval(overlayManager, {
-      address: resolved.address,
-      amount,
-      domain: resolved.domain,
-      comment,
-      commentEncrypted: Boolean(commentBody),
-      estimatedFee: preflight.estimatedFee,
-    })
-    if (!approved) ipcFailure('USER_CANCELLED', 'Transfer cancelled')
+
     let tx: WalletTransaction
     try {
       tx = commentBody
-        ? await walletManager.send(resolved.address, amount, comment, walletIdentity, commentBody, true)
-        : await walletManager.send(resolved.address, amount, comment, walletIdentity)
+        ? await walletManager.send(resolved.address, amount, effectiveComment, walletIdentity, commentBody, true)
+        : await walletManager.send(resolved.address, amount, effectiveComment, walletIdentity)
     } catch (error) {
       ipcFailure('SIGNING_FAILED', 'Unable to sign or send transaction', false, error)
     }
