@@ -1,7 +1,12 @@
-// === ANTI-FINGERPRINTING PROTECTIONS ===
-// Runs in preload before page content loads
-(function() {
+const { contextBridge, ipcRenderer } = require('electron')
+if (!process.contextIsolated) throw new Error('contextIsolation must be enabled')
+
+// Only the pure page protections cross into the page world. IPC stays isolated.
+try {
+  const privacy = contextBridge.executeInMainWorld({ func: function installPrivacy() {
   'use strict';
+  const applied = [];
+  const failed = [];
 
   // === FUNCTION.PROTOTYPE.TOSTRING PATCH ===
   // Track patched functions so they return [native code] when inspected
@@ -18,7 +23,7 @@
 
   // Helper: wrap each section so one failure doesn't kill the entire script
   function protect(name, fn) {
-    try { fn(); } catch(e) { console.warn('[Privacy] ' + name + ' failed:', e.message); }
+    try { fn(); applied.push(name); } catch { failed.push(name); }
   }
 
   // === NAVIGATOR PROPERTIES SPOOFING ===
@@ -98,36 +103,29 @@
     };
     patchedFunctions.set(CanvasRenderingContext2D.prototype.getImageData, 'getImageData');
 
+    const copyForExport = (canvas) => {
+      if (canvas.width === 0 || canvas.height === 0) return canvas;
+      // Read with the original method: exporting must neither double-noise nor
+      // temporarily mutate the source (including during an asynchronous toBlob).
+      const copy = document.createElement('canvas');
+      copy.width = canvas.width;
+      copy.height = canvas.height;
+      const ctx = copy.getContext('2d');
+      ctx.drawImage(canvas, 0, 0);
+      const imageData = originalGetImageData.call(ctx, 0, 0, canvas.width, canvas.height);
+      imageData.data.set(noisifyCanvasData(imageData.data, canvas.width, canvas.height));
+      ctx.putImageData(imageData, 0, 0);
+      return copy;
+    };
     const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
     HTMLCanvasElement.prototype.toDataURL = function(...args) {
-      const ctx = this.getContext('2d');
-      if (!ctx) return originalToDataURL.apply(this, args);
-      const imageData = ctx.getImageData(0, 0, this.width, this.height);
-      const noisedData = ctx.createImageData(this.width, this.height);
-      noisedData.data.set(noisifyCanvasData(imageData.data, this.width, this.height));
-      ctx.putImageData(noisedData, 0, 0);
-      const result = originalToDataURL.apply(this, args);
-      ctx.putImageData(imageData, 0, 0);
-      return result;
+      return originalToDataURL.apply(copyForExport(this), args);
     };
     patchedFunctions.set(HTMLCanvasElement.prototype.toDataURL, 'toDataURL');
 
     const originalToBlob = HTMLCanvasElement.prototype.toBlob;
     HTMLCanvasElement.prototype.toBlob = function(...args) {
-      const ctx = this.getContext('2d');
-      if (!ctx) return originalToBlob.apply(this, args);
-      const imageData = ctx.getImageData(0, 0, this.width, this.height);
-      const noisedData = ctx.createImageData(this.width, this.height);
-      noisedData.data.set(noisifyCanvasData(imageData.data, this.width, this.height));
-      ctx.putImageData(noisedData, 0, 0);
-      const callback = args[0];
-      const that = this;
-      const restoreCallback = function(blob) {
-        ctx.putImageData(imageData, 0, 0);
-        if (callback) callback.call(that, blob);
-      };
-      args[0] = restoreCallback;
-      return originalToBlob.apply(this, args);
+      return originalToBlob.apply(copyForExport(this), args);
     };
     patchedFunctions.set(HTMLCanvasElement.prototype.toBlob, 'toBlob');
   });
@@ -236,42 +234,66 @@
       // Wrap an icecandidate callback to redact IP addresses from candidates
       const wrapIceCandidateListener = (fn, ctx) => {
         return (event) => {
+          let delivered = event;
           if (event.candidate && event.candidate.candidate) {
             const modified = new RTCIceCandidate({
               candidate: sanitizeCandidate(event.candidate.candidate),
               sdpMid: event.candidate.sdpMid,
               sdpMLineIndex: event.candidate.sdpMLineIndex,
+              usernameFragment: event.candidate.usernameFragment,
             })
             const modifiedEvent = new Event('icecandidate')
             Object.defineProperty(modifiedEvent, 'candidate', { value: modified })
-            fn.call(ctx, modifiedEvent)
-          } else {
-            fn.call(ctx, event)
+            Object.defineProperties(modifiedEvent, { target: { value: ctx }, currentTarget: { value: ctx } })
+            delivered = modifiedEvent;
           }
+          if (typeof fn === 'function') fn.call(ctx, delivered);
+          else fn.handleEvent(delivered);
         }
       }
 
       // Intercept addEventListener to wrap icecandidate listeners
       const origAddEventListener = RTCPeerConnection.prototype.addEventListener;
+      const origRemoveEventListener = RTCPeerConnection.prototype.removeEventListener;
+      const listenerWrappers = new WeakMap();
+      const captureFlag = (options) => typeof options === 'boolean' ? options : !!(options && options.capture);
+      const getWrapper = (target, listener, options, create) => {
+        if (!listener || (typeof listener !== 'function' && typeof listener !== 'object')) return listener;
+        let listeners = listenerWrappers.get(target);
+        if (!listeners && create) { listeners = new WeakMap(); listenerWrappers.set(target, listeners); }
+        let captures = listeners && listeners.get(listener);
+        if (!captures && create) { captures = new Map(); listeners.set(listener, captures); }
+        const capture = captureFlag(options);
+        if (captures && !captures.has(capture) && create) captures.set(capture, wrapIceCandidateListener(listener, target));
+        return captures && captures.get(capture) || listener;
+      };
       RTCPeerConnection.prototype.addEventListener = function(type, listener, options) {
         if (type === 'icecandidate') {
-          return origAddEventListener.call(this, type, wrapIceCandidateListener(listener, this), options)
+          return origAddEventListener.call(this, type, getWrapper(this, listener, options, true), options)
         }
         return origAddEventListener.call(this, type, listener, options)
       }
+      RTCPeerConnection.prototype.removeEventListener = function(type, listener, options) {
+        return origRemoveEventListener.call(this, type, type === 'icecandidate' ? getWrapper(this, listener, options, false) : listener, options);
+      };
+      patchedFunctions.set(RTCPeerConnection.prototype.addEventListener, 'addEventListener');
+      patchedFunctions.set(RTCPeerConnection.prototype.removeEventListener, 'removeEventListener');
 
       // Intercept onicecandidate property setter
       const origOnIceCandidateDesc = Object.getOwnPropertyDescriptor(RTCPeerConnection.prototype, 'onicecandidate');
+      const propertyListeners = new WeakMap();
       if (origOnIceCandidateDesc) {
         Object.defineProperty(RTCPeerConnection.prototype, 'onicecandidate', {
           set(fn) {
             if (typeof fn === 'function') {
+              propertyListeners.set(this, fn);
               origOnIceCandidateDesc.set.call(this, wrapIceCandidateListener(fn, this))
             } else {
+              propertyListeners.delete(this);
               origOnIceCandidateDesc.set.call(this, fn)
             }
           },
-          get() { return origOnIceCandidateDesc.get.call(this) },
+          get() { return propertyListeners.get(this) || origOnIceCandidateDesc.get.call(this) },
           configurable: true,
         })
       }
@@ -299,6 +321,8 @@
         return pc;
       };
       wrappedRTC.prototype = origRTCPeerConnection.prototype;
+      Object.setPrototypeOf(wrappedRTC, origRTCPeerConnection);
+      patchedFunctions.set(wrappedRTC, 'RTCPeerConnection');
       Object.defineProperty(window, 'RTCPeerConnection', {
         value: wrappedRTC,
         writable: true,
@@ -397,12 +421,14 @@
   // Spoof Intl.DateTimeFormat to UTC
   protect('DateTimeFormat', () => {
     const OrigDateTimeFormat = Intl.DateTimeFormat;
+    const DateTimeFormat = function(locales, options) {
+      return new OrigDateTimeFormat(locales, { ...options, timeZone: 'UTC' });
+    };
+    DateTimeFormat.prototype = OrigDateTimeFormat.prototype;
+    Object.setPrototypeOf(DateTimeFormat, OrigDateTimeFormat);
+    patchedFunctions.set(DateTimeFormat, 'DateTimeFormat');
     Object.defineProperty(Intl, 'DateTimeFormat', {
-      value: function(...args) {
-        const options = args[1] || {};
-        options.timeZone = 'UTC';
-        return new OrigDateTimeFormat(args[0], options);
-      },
+      value: DateTimeFormat,
       writable: true,
       configurable: true
     });
@@ -459,10 +485,12 @@
   // === OFFSCREENCANVAS FINGERPRINT PROTECTION ===
   protect('OffscreenCanvasFingerprint', () => {
     if (typeof OffscreenCanvas !== 'undefined') {
+      const patchedContexts = new WeakSet();
       var origGetContext = OffscreenCanvas.prototype.getContext;
       OffscreenCanvas.prototype.getContext = function(type) {
         var ctx = origGetContext.apply(this, arguments);
-        if (ctx && type === '2d') {
+        if (ctx && type === '2d' && !patchedContexts.has(ctx)) {
+          patchedContexts.add(ctx);
           var origGetImageData = ctx.getImageData;
           ctx.getImageData = function() {
             var imageData = origGetImageData.apply(this, arguments);
@@ -562,14 +590,15 @@
     }
   });
 
-  console.log('[Privacy] Anti-fingerprinting protections active');
-})();
+  return { applied, failed };
+  } });
+  if (privacy.failed.length) console.warn('[Privacy] Protection installation incomplete:', privacy.failed.join(', '));
+  else console.log('[Privacy] Page protections installed:', privacy.applied.length);
+} catch (error) {
+  console.error('[Privacy] Page protection installation failed:', error.message);
+}
 
 // === TON BRIDGE API ===
-const { contextBridge, ipcRenderer } = require('electron')
-
-if (!process.contextIsolated) throw new Error('contextIsolation must be enabled')
-
 contextBridge.exposeInMainWorld('tonBridge', {
   send: function (data) {
     if (typeof data !== 'string' || data.length > 65536) return
