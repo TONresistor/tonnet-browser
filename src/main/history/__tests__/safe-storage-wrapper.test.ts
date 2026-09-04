@@ -97,4 +97,49 @@ describe('SafeStorageWrapper version migration', () => {
       payload: second,
     })
   })
+
+  it.each(['unavailable', 'decrypt', 'future', 'invalid'])(
+    'preserves an unreadable encrypted file: %s',
+    async (failure) => {
+      const { directory, filePath } = await setup()
+      const secure = new IdentitySecureStorage()
+      const json = JSON.stringify({
+        schemaVersion: failure === 'future' ? 2 : 1,
+        payload: failure === 'invalid' ? [{ id: 4 }] : fixture,
+      })
+      const bytes = Buffer.concat([SENC_MARKER, secure.encrypt(json)])
+      await writeFile(filePath, bytes)
+      if (failure === 'unavailable') secure.isAvailable = () => false
+      if (failure === 'decrypt')
+        secure.decrypt = () => {
+          throw new Error('locked')
+        }
+      const storage = new SafeStorageWrapper('history', options, secure, directory)
+      const codes = {
+        unavailable: 'encryption-unavailable',
+        decrypt: 'decryption-failed',
+        future: 'unsupported-version',
+        invalid: 'invalid-data',
+      }
+      await expect(storage.read()).rejects.toMatchObject({ code: codes[failure as keyof typeof codes] })
+      // A failed instance cannot overwrite the original, even when the OS recovers.
+      secure.isAvailable = () => true
+      await expect(storage.write(fixture)).rejects.toThrow()
+      expect(await readFile(filePath)).toEqual(bytes)
+    }
+  )
+
+  it('rejects queued writes when encryption becomes unavailable, without a plaintext fallback', async () => {
+    const { directory, filePath } = await setup()
+    const secure = new IdentitySecureStorage()
+    const storage = new SafeStorageWrapper('history', options, secure, directory)
+    await storage.write(fixture)
+    const original = await readFile(filePath)
+    const first = storage.write([])
+    const second = storage.write(fixture)
+    secure.isAvailable = () => false
+    const outcomes = await Promise.allSettled([first, second])
+    expect(outcomes.map((outcome) => outcome.status)).toEqual(['rejected', 'rejected'])
+    expect(await readFile(filePath)).toEqual(original)
+  })
 })

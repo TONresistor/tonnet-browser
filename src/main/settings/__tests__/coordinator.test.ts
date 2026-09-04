@@ -102,6 +102,24 @@ describe('SettingsCoordinator', () => {
     expect(dependencies.tabManager.applyDefaultZoom).toHaveBeenCalledWith(150)
   })
 
+  it('forces only history reconciliation on explicit retry of the configured mode', async () => {
+    current = AppSettingsSchema.parse({ privacy: { historyMode: 'persistent' } })
+    const dependencies = createDependencies()
+    const coordinator = new SettingsCoordinator(dependencies)
+    await coordinator.apply({ privacy: { historyMode: 'persistent' } }, { reconcileHistory: true })
+    expect(mocks.transact).toHaveBeenCalledWith(
+      expect.any(Function),
+      expect.any(Function),
+      expect.any(Function),
+      expect.any(Function),
+      { applyUnchanged: true }
+    )
+    expect(dependencies.historyManager.applySettings).toHaveBeenCalledWith(current.privacy)
+    expect(dependencies.proxyManager.applySettingsChange).not.toHaveBeenCalled()
+    expect(dependencies.storageManager.applySettingsChange).not.toHaveBeenCalled()
+    expect(dependencies.tonConnectService.clearSessions).not.toHaveBeenCalled()
+  })
+
   it('clears custom TON Connect sessions when the experimental feature is disabled', async () => {
     current = AppSettingsSchema.parse({ advanced: { tonConnectEnabled: true } })
     const dependencies = createDependencies()

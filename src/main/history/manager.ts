@@ -5,11 +5,12 @@
  */
 
 import { EventEmitter } from 'events'
+import { createHash } from 'node:crypto'
 import { getSetting } from '../settings'
-import { SafeStorageWrapper } from './safe-storage-wrapper'
+import { HistoryStorageError, SafeStorageWrapper } from './safe-storage-wrapper'
 import { createLogger } from '../../shared/logger'
 import { HistoryEntry, HistoryStats, PrivacySettings } from '../../shared/types'
-import { HistoryEntrySchema } from '../../shared/ipc-contract/history'
+import { HistoryEntrySchema, type HistoryPersistenceError } from '../../shared/ipc-contract/history'
 import { z } from 'zod'
 const log = createLogger('history')
 
@@ -33,6 +34,7 @@ export class HistoryManager extends EventEmitter {
   private maxEntries: number = 1000
   private mode: HistoryMode = HistoryMode.MEMORY
   private storage: SafeStorageWrapper<HistoryEntry[]> | null = null
+  private persistenceError?: HistoryPersistenceError
   private readyPromise: Promise<void>
   private isReady: boolean = false
   private pendingEntries: Array<{ url: string; title: string; favicon?: string; countVisit: boolean }> = []
@@ -74,6 +76,8 @@ export class HistoryManager extends EventEmitter {
 
   private async loadPersistedEntries(): Promise<void> {
     const storage = this.createStorage()
+    if (!storage.isAvailable())
+      throw new HistoryStorageError('encryption-unavailable', 'History encryption is unavailable')
     const data = await storage.read()
     const entries = new Map<string, HistoryEntry>()
     if (data && Array.isArray(data)) {
@@ -103,10 +107,18 @@ export class HistoryManager extends EventEmitter {
         await this.loadPersistedEntries()
       } catch (error) {
         log.error('Failed to load persistent history:', error)
-        this.mode = HistoryMode.MEMORY
-        this.storage = null
+        this.suspendPersistence(error)
       }
     }
+  }
+
+  private suspendPersistence(error: unknown): void {
+    this.persistenceError = error instanceof HistoryStorageError ? error.code : 'io-error'
+    this.mode = HistoryMode.MEMORY
+    this.storage = null
+    if (this.saveTimer) clearTimeout(this.saveTimer)
+    this.saveTimer = null
+    this.emit('persistence-failed', this.persistenceError)
   }
 
   async applySettings(settings: PrivacySettings): Promise<void> {
@@ -131,6 +143,8 @@ export class HistoryManager extends EventEmitter {
       if (nextMode !== previousMode) {
         if (nextMode === HistoryMode.PERSISTENT) {
           const storage = this.createStorage()
+          if (!storage.isAvailable())
+            throw new HistoryStorageError('encryption-unavailable', 'History encryption is unavailable')
           const persisted = await storage.read()
           const entries = new Map<string, HistoryEntry>()
           for (const entry of persisted ?? []) entries.set(entry.id, entry)
@@ -171,10 +185,15 @@ export class HistoryManager extends EventEmitter {
       this.storage = nextStorage
       this.mode = nextMode
       this.maxEntries = settings.historyMaxEntries
+      if (nextMode === HistoryMode.PERSISTENT) this.persistenceError = undefined
       if (nextMode !== previousMode) {
         this.emit('mode-changed', nextMode)
         log.info(`Mode changed: ${previousMode} → ${nextMode}`)
       }
+    } catch (error) {
+      if (nextStorage && nextStorage === this.storage) this.suspendPersistence(error)
+      else this.persistenceError = error instanceof HistoryStorageError ? error.code : 'io-error'
+      throw error
     } finally {
       const pending = this.settingsTransitionEntries
       this.settingsTransitionEntries = null
@@ -204,7 +223,7 @@ export class HistoryManager extends EventEmitter {
     }
 
     // Don't record empty/invalid URLs
-    if (!url || url.length < 5) {
+    if (!url || url.length < 5 || url.length > 16_384) {
       return
     }
 
@@ -213,7 +232,7 @@ export class HistoryManager extends EventEmitter {
 
     if (existing) {
       // Update existing entry
-      existing.title = title || existing.title
+      existing.title = (title || existing.title).slice(0, 4_096)
       if (countVisit) {
         const now = Date.now()
         const isDuplicate = id === this.lastVisitKey && now - this.lastVisitTime < HistoryManager.VISIT_DEDUP_MS
@@ -234,7 +253,7 @@ export class HistoryManager extends EventEmitter {
       const entry: HistoryEntry = {
         id,
         url,
-        title: title || url,
+        title: (title || url).slice(0, 4_096),
         visitedAt: Date.now(),
         visitCount: 1,
         favicon,
@@ -257,13 +276,15 @@ export class HistoryManager extends EventEmitter {
 
   private generateId(url: string): string {
     // Use URL as ID (remove fragments and query for deduplication)
+    let cleanUrl = url
     try {
       const parsed = new URL(url)
-      const cleanUrl = `${parsed.protocol}//${parsed.host}${parsed.pathname}`
-      return Buffer.from(cleanUrl).toString('base64url')
+      cleanUrl = `${parsed.protocol}//${parsed.host}${parsed.pathname}`
     } catch {
-      return Buffer.from(url).toString('base64url')
+      /* Preserve the existing normalization for nonstandard URLs. */
     }
+    const legacyId = Buffer.from(cleanUrl).toString('base64url')
+    return legacyId.length <= 256 ? legacyId : `sha256:${createHash('sha256').update(cleanUrl).digest('hex')}`
   }
 
   private enforceLimit(): void {
@@ -456,6 +477,7 @@ export class HistoryManager extends EventEmitter {
       oldestEntry: entries.length > 0 ? Math.min(...entries.map((e) => e.visitedAt)) : undefined,
       newestEntry: entries.length > 0 ? Math.max(...entries.map((e) => e.visitedAt)) : undefined,
       isLocked: false,
+      ...(this.persistenceError ? { persistenceError: this.persistenceError } : {}),
     }
   }
 
@@ -498,12 +520,18 @@ export class HistoryManager extends EventEmitter {
    * Save to persistent storage (automatic encryption)
    */
   private async savePersistent(): Promise<void> {
-    if (!this.storage) {
+    const storage = this.storage
+    if (!storage || this.mode !== HistoryMode.PERSISTENT) {
       return
     }
 
     const entries = Array.from(this.entries.values())
-    await this.storage.write(entries)
+    try {
+      await storage.write(entries)
+    } catch (error) {
+      if (this.storage === storage) this.suspendPersistence(error)
+      throw error
+    }
     log.debug(`Saved ${entries.length} entries to persistent storage`)
   }
 

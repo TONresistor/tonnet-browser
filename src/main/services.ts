@@ -193,6 +193,15 @@ export function createServices(): ServiceRegistry {
     chatSessionController,
   })
 
+  lifecycleRegistrations.add(
+    onEmitter(historyManager, 'persistence-failed', () => {
+      // Settings mutations are queued: never await this from a failing history transition.
+      void settingsCoordinator.apply({ privacy: { historyMode: 'memory' } }).catch((error) => {
+        log.error('Failed to reconcile suspended history persistence:', error)
+      })
+    })
+  )
+
   return {
     ipcRegistrations,
     lifecycleRegistrations,

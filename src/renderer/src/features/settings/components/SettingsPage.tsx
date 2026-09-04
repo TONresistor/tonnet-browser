@@ -4,6 +4,7 @@
  */
 
 import { errorMessage } from '@shared/errors'
+import type { HistoryStats } from '@shared/types'
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { createLogger } from '@/logger'
 import { UI_NOTIFICATION_TIMEOUT_MS, UI_ERROR_TIMEOUT_MS } from '@shared/constants'
@@ -48,6 +49,7 @@ export function SettingsPage() {
   const [changingHistoryMode, setChangingHistoryMode] = useState(false)
   const resetConfirm = useConfirmAction()
   const [historyError, setHistoryError] = useState<string | null>(null)
+  const [persistenceError, setPersistenceError] = useState<HistoryStats['persistenceError']>()
   const [walletDirty, setWalletDirty] = useState(false)
   const [bridgeDirty, setBridgeDirty] = useState(false)
   const [http402Dirty, setHttp402Dirty] = useState(false)
@@ -72,6 +74,20 @@ export function SettingsPage() {
     resetToDefaults,
   } = usePreferencesStore()
   const hasChanges = prefsHasChanges || walletDirty || bridgeDirty || http402Dirty
+
+  useEffect(() => {
+    if (activeSection !== 'privacy') return
+    let current = true
+    void historyClient
+      .getStats()
+      .then((stats) => {
+        if (current) setPersistenceError(stats.persistenceError)
+      })
+      .catch((error) => log.error('Failed to read history persistence status:', error))
+    return () => {
+      current = false
+    }
+  }, [activeSection, draft.historyMode, changingHistoryMode])
 
   // Load settings on mount
   useEffect(() => {
@@ -195,7 +211,11 @@ export function SettingsPage() {
               changingHistoryMode={changingHistoryMode}
               onHistoryModeChange={handleHistoryModeChange}
             />
-            {historyError && <p className="mt-2 text-sm text-destructive px-1">{historyError}</p>}
+            {(historyError || persistenceError) && (
+              <p className="mt-2 text-sm text-destructive px-1">
+                {historyError || t('history.persistenceUnavailable')}
+              </p>
+            )}
           </div>
         )
 

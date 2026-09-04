@@ -27,7 +27,7 @@ export function registerHistoryHandlers(registry: ServiceRegistry): void {
 
   secureContractHandle(historyChangeModeContract, async (mode) => {
     try {
-      await registry.settingsCoordinator.apply({ privacy: { historyMode: mode } })
+      await registry.settingsCoordinator.apply({ privacy: { historyMode: mode } }, { reconcileHistory: true })
       return { success: true }
     } catch (error) {
       ipcFailure('HISTORY_MODE_CHANGE_FAILED', 'Unable to change history mode', false, error)

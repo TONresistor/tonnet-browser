@@ -17,8 +17,10 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('../../settings', () => ({ getSetting: vi.fn(() => ({ ...mocks.privacy })) }))
-vi.mock('../safe-storage-wrapper', () => ({
+vi.mock('../safe-storage-wrapper', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../safe-storage-wrapper')>()),
   SafeStorageWrapper: class {
+    isAvailable = () => true
     read = mocks.read
     write = mocks.write
     delete = mocks.remove
@@ -214,7 +216,7 @@ describe('HistoryManager settings', () => {
     expect((await manager.getStats()).mode).toBe('memory')
   })
 
-  it('keeps persistent mode and entries when the final flush fails', async () => {
+  it('suspends persistence and keeps entries in memory when the final flush fails', async () => {
     mocks.privacy.historyMode = 'persistent'
     const manager = new HistoryManager()
     await manager.ready()
@@ -223,7 +225,7 @@ describe('HistoryManager settings', () => {
 
     await expect(manager.applySettings({ ...mocks.privacy, historyMode: 'memory' })).rejects.toThrow('disk full')
 
-    expect((await manager.getStats()).mode).toBe('persistent')
+    expect(await manager.getStats()).toMatchObject({ mode: 'memory', persistenceError: 'io-error' })
     await expect(manager.getRecent()).resolves.toEqual([expect.objectContaining({ url: 'https://example.ton/page' })])
   })
 

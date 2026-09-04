@@ -10,8 +10,9 @@ import type { ISecureStorage } from '../ports/secure-storage'
 import { ElectronSafeStorageAdapter } from '../adapters/electron-secure-storage'
 import { createLogger } from '../../shared/logger'
 import { isEnoent } from '../utils/errors'
-import { writeFileAtomic, writeSecureFileAtomic } from '../utils/secure-fs'
+import { writeFileAtomic } from '../utils/secure-fs'
 import { SENC_MARKER, encodeSenc } from '../utils/senc'
+import type { HistoryPersistenceError } from '../../shared/ipc-contract/history'
 const log = createLogger('history')
 
 export interface VersionedSafeStorageOptions<T> {
@@ -25,10 +26,22 @@ interface StoredEnvelope {
   payload: unknown
 }
 
+export class HistoryStorageError extends Error {
+  constructor(
+    readonly code: HistoryPersistenceError,
+    message: string,
+    options?: ErrorOptions
+  ) {
+    super(message, options)
+    this.name = 'HistoryStorageError'
+  }
+}
+
 export class SafeStorageWrapper<T> {
   private storage: ISecureStorage
   private filePath: string
   private writeChain: Promise<void> = Promise.resolve()
+  private failure: HistoryStorageError | null = null
 
   constructor(
     name: string,
@@ -52,26 +65,35 @@ export class SafeStorageWrapper<T> {
   /**
    * Write data with automatic encryption.
    * Encrypted files are prefixed with the SENC marker.
-   * Plaintext files are written as UTF-8 JSON with no marker.
+   * Failed storage stays write-blocked; retry uses a fresh, validated instance.
    */
   async write(data: T): Promise<void> {
-    const value = this.options.parse(data)
+    let value: T
+    try {
+      value = this.options.parse(data)
+    } catch (error) {
+      throw this.block('invalid-data', 'Invalid history data', error)
+    }
     const write = this.writeChain
       .catch(() => undefined)
       .then(async () => {
         try {
+          if (this.failure) throw this.failure
           const json = JSON.stringify({ schemaVersion: this.options.version, payload: value })
           if (!this.isAvailable()) {
-            log.warn('Encryption not available, storing unencrypted')
-            await writeSecureFileAtomic(this.filePath, json, 'utf-8')
-            return
+            throw this.block('encryption-unavailable', 'History encryption is unavailable')
           }
-          const markedBuffer = encodeSenc(this.storage, json)
+          let markedBuffer: Buffer
+          try {
+            markedBuffer = encodeSenc(this.storage, json)
+          } catch (error) {
+            throw this.block('encryption-unavailable', 'History encryption failed', error)
+          }
           await writeFileAtomic(this.filePath, markedBuffer)
           log.debug(`Wrote ${markedBuffer.length} encrypted bytes (with SENC marker)`)
         } catch (error) {
           log.error('Failed to write:', error)
-          throw error
+          throw this.block('io-error', 'Unable to write encrypted history', error)
         }
       })
     this.writeChain = write
@@ -83,7 +105,8 @@ export class SafeStorageWrapper<T> {
    * Format is detected from the file contents — not from current encryption availability:
    *   - Starts with 'SENC' → new encrypted format (decrypt bytes after the marker)
    *   - Starts with '{' or '[' → plaintext JSON
-   *   - Otherwise → legacy encrypted format (no marker); try to decrypt, fall back to empty array
+   *   - Otherwise → legacy encrypted format (no marker)
+   * Only a missing file returns null; unreadable data must not look like empty history.
    */
   async read(): Promise<T | null> {
     try {
@@ -91,50 +114,62 @@ export class SafeStorageWrapper<T> {
 
       // New encrypted format: SENC marker prefix
       if (buffer.subarray(0, 4).equals(SENC_MARKER)) {
-        try {
-          const decrypted = this.storage.decrypt(buffer.subarray(4))
-          return this.decode(JSON.parse(decrypted))
-        } catch (decryptError) {
-          log.error('SENC-marked file failed to decrypt, treating as corrupt:', decryptError)
-          return null
-        }
+        return this.decodeJson(this.decrypt(buffer.subarray(4)))
       }
 
       // Plaintext JSON (written when encryption was unavailable)
       const firstByte = buffer[0]
       if (firstByte === 0x7b /* '{' */ || firstByte === 0x5b /* '[' */) {
         const json = buffer.toString('utf-8')
-        return this.decode(JSON.parse(json))
+        return this.decodeJson(json)
       }
 
       // Legacy encrypted format (written before SENC marker was introduced)
       log.info('Detected legacy encrypted file (no SENC marker), attempting decrypt')
-      try {
-        const decrypted = this.storage.decrypt(buffer)
-        return this.decode(JSON.parse(decrypted))
-      } catch (legacyError) {
-        log.error('Legacy encrypted file could not be decrypted:', legacyError)
-        return null
-      }
+      if (buffer.length === 0) throw this.block('invalid-data', 'History file is empty')
+      return this.decodeJson(this.decrypt(buffer))
     } catch (error) {
       if (isEnoent(error)) return null
       log.error('Failed to read:', error)
-      throw error
+      throw this.block('io-error', 'Unable to read history', error)
     }
   }
 
   private decode(raw: unknown): T {
     const envelope = asEnvelope(raw)
     if (envelope && envelope.schemaVersion > this.options.version) {
-      throw new Error(`Unsupported schema version ${envelope.schemaVersion} for ${this.filePath}`)
+      throw this.block(
+        'unsupported-version',
+        `Unsupported schema version ${envelope.schemaVersion} for ${this.filePath}`
+      )
     }
     const migrated = this.options.migrate(envelope?.payload ?? raw, envelope?.schemaVersion ?? 0)
     return this.options.parse(migrated)
   }
 
-  /**
-   * Delete the encrypted file
-   */
+  private block(code: HistoryPersistenceError, message: string, cause?: unknown): HistoryStorageError {
+    this.failure ??= cause instanceof HistoryStorageError ? cause : new HistoryStorageError(code, message, { cause })
+    return this.failure
+  }
+
+  private decrypt(buffer: Buffer): string {
+    if (!this.isAvailable()) throw this.block('encryption-unavailable', 'History encryption is unavailable')
+    try {
+      return this.storage.decrypt(buffer)
+    } catch (error) {
+      throw this.block('decryption-failed', 'Unable to decrypt history', error)
+    }
+  }
+
+  private decodeJson(json: string): T {
+    try {
+      return this.decode(JSON.parse(json))
+    } catch (error) {
+      throw this.block('invalid-data', 'Invalid history data', error)
+    }
+  }
+
+  /** Delete the encrypted file only on explicit request. */
   async delete(): Promise<void> {
     try {
       await this.writeChain.catch(() => undefined)

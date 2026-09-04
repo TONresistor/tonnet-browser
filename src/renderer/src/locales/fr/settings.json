@@ -183,6 +183,7 @@
     "historyMode": "Mode d'historique",
     "historyModeMemory": "RAM uniquement, effacé à la fermeture",
     "historyModePersistent": "Chiffrement automatique sur disque via le trousseau système",
+    "persistenceUnavailable": "L’historique reste en mémoire car le stockage chiffré est indisponible. Les fichiers existants ont été conservés.",
     "modeLive": "Temporaire",
     "modePersistent": "Persistant",
     "maxEntries": "Entrées maximales",

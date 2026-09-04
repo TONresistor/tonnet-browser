@@ -48,15 +48,16 @@ function bridgeRestartRequired(previous: AppSettings, current: AppSettings): boo
 export class SettingsCoordinator {
   constructor(private readonly dependencies: SettingsRuntimeDependencies) {}
 
-  async apply(patch: SettingsPatch): Promise<AppSettings> {
+  async apply(patch: SettingsPatch, options: { reconcileHistory?: boolean } = {}): Promise<AppSettings> {
     const settings = await transactSettings(
       (current) => {
         const next = mergeSettingsPatch(current, patch)
         return next
       },
       (previous, current) => this.reconcile(previous, current),
-      (previous, current) => this.finalize(previous, current),
-      (previous, current, operation) => this.guardChat(previous, current, operation)
+      (previous, current) => this.finalize(previous, current, false, options.reconcileHistory),
+      (previous, current, operation) => this.guardChat(previous, current, operation),
+      { applyUnchanged: options.reconcileHistory === true }
     )
     for (const category of Object.keys(patch) as Array<keyof AppSettings>) {
       emitContractToRenderer(settingsChangedContract, {
@@ -136,8 +137,17 @@ export class SettingsCoordinator {
     }
   }
 
-  private async finalize(previous: AppSettings, current: AppSettings, force = false): Promise<void> {
-    if (force || fieldsChanged(previous.privacy, current.privacy, ['historyMode', 'historyMaxEntries'])) {
+  private async finalize(
+    previous: AppSettings,
+    current: AppSettings,
+    force = false,
+    reconcileHistory = false
+  ): Promise<void> {
+    if (
+      force ||
+      reconcileHistory ||
+      fieldsChanged(previous.privacy, current.privacy, ['historyMode', 'historyMaxEntries'])
+    ) {
       await this.dependencies.historyManager.applySettings(current.privacy)
     }
     if (force) this.dependencies.bridgePermissionStore.clearSessionGrants()

@@ -334,6 +334,7 @@
     "historyMode": "History mode",
     "historyModeMemory": "RAM only, cleared on exit",
     "historyModePersistent": "Auto-encrypted on disk via OS keychain",
+    "persistenceUnavailable": "History is kept in memory because encrypted storage is unavailable. Existing files were preserved.",
     "modeLive": "Live",
     "modePersistent": "Persistent",
     "maxEntries": "Maximum entries",

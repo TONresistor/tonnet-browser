@@ -1,5 +1,6 @@
 /** Typed main-process boundary owned by the history feature. */
 export const historyClient = {
+  getStats: () => window.electron.history.getStats(),
   search: (query: string, limit: number) => window.electron.history.search(query, limit),
   getRecent: (limit: number) => window.electron.history.getRecent(limit),
   getByDate: (start: number, end: number) => window.electron.history.getByDate(start, end),

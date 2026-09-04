@@ -10,12 +10,21 @@ export const HistoryEntrySchema = z.object({
   visitCount: z.number().int().nonnegative(),
   favicon: z.string().max(1_048_576).optional(),
 })
+export const HistoryPersistenceErrorSchema = z.enum([
+  'encryption-unavailable',
+  'decryption-failed',
+  'invalid-data',
+  'unsupported-version',
+  'io-error',
+])
+export type HistoryPersistenceError = z.infer<typeof HistoryPersistenceErrorSchema>
 export const HistoryStatsSchema = z.object({
   total: z.number().int().nonnegative(),
   mode: z.enum(['memory', 'persistent']),
   oldestEntry: z.number().finite().nonnegative().optional(),
   newestEntry: z.number().finite().nonnegative().optional(),
   isLocked: z.boolean(),
+  persistenceError: HistoryPersistenceErrorSchema.optional(),
 })
 const LimitSchema = z.number().int().min(1).max(1_000).optional()
 const DateRangeSchema = z
