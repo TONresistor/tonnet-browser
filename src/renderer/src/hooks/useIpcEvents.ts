@@ -8,13 +8,23 @@ import { useBrowserStore } from '@/stores/browser'
 import { useTabsStore } from '@/stores/tabs'
 import { IPC_CHANNELS } from '@shared/ipc-channels'
 import { browserClient } from '@/features/browser/client'
+import { resolveInternalRoute } from '@/app-shell/internal-routes'
 
 export function useIpcEvents(updateTab: ReturnType<typeof useTabsStore.getState>['updateTab']): void {
   useEffect(() => {
     const { setNavigation, setLoading, setTitle } = useBrowserStore.getState()
 
+    const pageTab = (tabId: string) => {
+      const tab = useTabsStore.getState().tabs.find((candidate) => candidate.id === tabId)
+      if (!tab) return undefined
+      const route = resolveInternalRoute(tab.url)
+      return !route || route.kind === 'storage-file' ? tab : undefined
+    }
+    const isActive = (tabId: string) => useTabsStore.getState().activeTabId === tabId
+
     const unsubNavigate = browserClient.on(IPC_CHANNELS.PAGE_NAVIGATE, (data) => {
-      setNavigation(data.url, data.canGoBack, data.canGoForward)
+      if (!pageTab(data.tabId)) return
+      if (isActive(data.tabId)) setNavigation(data.url, data.canGoBack, data.canGoForward)
       // Update tab state + push to history for bag file navigation
       if (data.tabId) {
         const tab = useTabsStore.getState().tabs.find((t) => t.id === data.tabId)
@@ -35,21 +45,23 @@ export function useIpcEvents(updateTab: ReturnType<typeof useTabsStore.getState>
     })
 
     const unsubLoading = browserClient.on(IPC_CHANNELS.PAGE_LOADING, (loading, tabId) => {
-      setLoading(loading)
+      if (!pageTab(tabId)) return
+      if (isActive(tabId)) setLoading(loading)
       if (tabId) {
         updateTab(tabId, { isLoading: loading })
       }
     })
 
     const unsubTitle = browserClient.on(IPC_CHANNELS.PAGE_TITLE, (title, tabId) => {
-      setTitle(title)
+      if (!pageTab(tabId)) return
+      if (isActive(tabId)) setTitle(title)
       if (tabId) {
         updateTab(tabId, { title })
       }
     })
 
     const unsubFavicon = browserClient.on(IPC_CHANNELS.PAGE_FAVICON, (favicon, tabId) => {
-      if (tabId) {
+      if (pageTab(tabId)) {
         updateTab(tabId, { favicon })
       }
     })

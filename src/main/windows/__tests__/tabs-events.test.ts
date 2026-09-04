@@ -118,6 +118,14 @@ describe('tab navigation events', () => {
     )
     listeners.dispose()
   })
+
+  it('ignores in-page navigation from a subframe', () => {
+    const { historyManager, listeners, webContents } = createHarness()
+    webContents.emit('did-navigate-in-page', {}, 'http://embedded.ton/#changed', false)
+    expect(mocks.emitContractToRenderer).not.toHaveBeenCalled()
+    expect(historyManager.addEntry).not.toHaveBeenCalled()
+    listeners.dispose()
+  })
 })
 
 describe('tab shortcut input', () => {

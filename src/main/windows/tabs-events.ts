@@ -81,7 +81,11 @@ export function setupViewEventListeners(view: WebContentsView, tabId: string, de
     historyManager.addEntry(url, boundedTitle(view.webContents.getTitle()))
   }
   store.add(onWebContents(view.webContents, 'did-navigate', handleNavigate))
-  store.add(onWebContents(view.webContents, 'did-navigate-in-page', handleNavigate))
+  store.add(
+    onWebContents(view.webContents, 'did-navigate-in-page', (event: unknown, url: string, isMainFrame: boolean) => {
+      if (isMainFrame) handleNavigate(event, url)
+    })
+  )
 
   store.add(
     onWebContents(view.webContents, 'page-title-updated', (_e: unknown, title: string) => {

@@ -70,12 +70,10 @@ function deferred<T>() {
 }
 
 // Mock useBrowserStore
+const browserStateMocks = vi.hoisted(() => ({ setNavigation: vi.fn(), setTitle: vi.fn(), setLoading: vi.fn() }))
 vi.mock('../browser', () => ({
   useBrowserStore: {
-    getState: () => ({
-      setNavigation: vi.fn(),
-      setTitle: vi.fn(),
-    }),
+    getState: () => browserStateMocks,
   },
 }))
 
@@ -115,6 +113,19 @@ describe('getInternalPageTitle', () => {
 })
 
 describe('tabs store', () => {
+  it('clears loading on internal navigation and restores it if navigation fails', async () => {
+    await useTabsStore.getState().addTab('http://loading.ton')
+    const id = useTabsStore.getState().activeTabId!
+    useTabsStore.getState().updateTab(id, { isLoading: true })
+    mockElectron.navigate.mockResolvedValueOnce({ success: false })
+    await useTabsStore.getState().navigateActiveTab('ton://settings')
+    expect(useTabsStore.getState().tabs[0].isLoading).toBe(true)
+    expect(browserStateMocks.setLoading).toHaveBeenLastCalledWith(true)
+    await useTabsStore.getState().navigateActiveTab('ton://settings')
+    expect(useTabsStore.getState().tabs[0].isLoading).toBe(false)
+    expect(browserStateMocks.setLoading).toHaveBeenLastCalledWith(false)
+  })
+
   describe('addTab', () => {
     it('adds a new tab with the given URL', async () => {
       await useTabsStore.getState().addTab('http://example.ton')
@@ -168,6 +179,26 @@ describe('tabs store', () => {
   })
 
   describe('closeTab', () => {
+    it('keeps replacement metadata updated during a pending close', async () => {
+      await useTabsStore.getState().addTab('http://a.ton')
+      await useTabsStore.getState().addTab('http://b.ton')
+      const [replacement, closing] = useTabsStore.getState().tabs
+      useTabsStore.getState().updateTab(replacement.id, { isLoading: true })
+      const pending = deferred<void>()
+      mockElectron.tabs.close.mockReturnValueOnce(pending.promise)
+      const closingTab = useTabsStore.getState().closeTab(closing.id)
+      useTabsStore.getState().updateTab(replacement.id, { url: 'http://a.ton/ready', title: 'Ready', isLoading: false })
+      pending.resolve()
+      await closingTab
+      expect(useTabsStore.getState().tabs[0]).toMatchObject({
+        url: 'http://a.ton/ready',
+        title: 'Ready',
+        isLoading: false,
+      })
+      expect(browserStateMocks.setLoading).toHaveBeenLastCalledWith(false)
+      expect(browserStateMocks.setNavigation).toHaveBeenLastCalledWith('http://a.ton/ready', false, false)
+    })
+
     it('removes the closed tab', async () => {
       await useTabsStore.getState().addTab('http://example.ton')
       const tabId = useTabsStore.getState().tabs[0].id
@@ -249,6 +280,21 @@ describe('tabs store', () => {
   })
 
   describe('setActiveTab', () => {
+    it('synchronizes metadata received while the tab switch is pending', async () => {
+      await useTabsStore.getState().addTab('http://a.ton')
+      await useTabsStore.getState().addTab('http://b.ton')
+      const id = useTabsStore.getState().tabs[0].id
+      const pending = deferred<void>()
+      mockElectron.tabs.switch.mockReturnValueOnce(pending.promise)
+      const switching = useTabsStore.getState().setActiveTab(id)
+      useTabsStore.getState().updateTab(id, { url: 'http://a.ton/new', title: 'Updated', isLoading: true })
+      pending.resolve()
+      await switching
+      expect(browserStateMocks.setNavigation).toHaveBeenLastCalledWith('http://a.ton/new', false, false)
+      expect(browserStateMocks.setTitle).toHaveBeenLastCalledWith('Updated')
+      expect(browserStateMocks.setLoading).toHaveBeenLastCalledWith(true)
+    })
+
     it('switches active tab', async () => {
       await useTabsStore.getState().addTab('http://a.ton')
       await useTabsStore.getState().addTab('http://b.ton')
