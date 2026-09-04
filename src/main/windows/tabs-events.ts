@@ -9,6 +9,7 @@ import { extractFavicon } from './browser-view'
 import { createLogger } from '../../shared/logger'
 import { emitContractToRenderer } from '../events/renderer-events'
 import {
+  BrowserUrlSchema,
   contextOpenLinkContract,
   pageFaviconContract,
   pageLoadingContract,
@@ -29,6 +30,16 @@ const log = createLogger('tabs-events')
 function isInternalPresentationUrl(url: string): boolean {
   return url.startsWith('data:') || url.startsWith('file:')
 }
+
+function isPublishablePageUrl(url: string): boolean {
+  if (isInternalPresentationUrl(url)) return false
+  if (BrowserUrlSchema.safeParse(url).success) return true
+  log.event('warn', 'page.url.rejected', 'page URL exceeds the browser contract', { length: url.length })
+  return false
+}
+
+// History has the tightest title limit among the consumers of page metadata.
+const boundedTitle = (title: string): string => title.slice(0, 4_096)
 
 /** Dependencies needed by setupViewEventListeners */
 export interface TabEventDeps {
@@ -60,24 +71,25 @@ export function setupViewEventListeners(view: WebContentsView, tabId: string, de
   )
 
   const handleNavigate = (_e: unknown, url: string): void => {
-    if (isInternalPresentationUrl(url)) return
+    if (!isPublishablePageUrl(url)) return
     emitContractToRenderer(pageNavigateContract, {
       tabId,
       url,
       canGoBack: view.webContents.navigationHistory.canGoBack(),
       canGoForward: view.webContents.navigationHistory.canGoForward(),
     })
-    historyManager.addEntry(url, view.webContents.getTitle())
+    historyManager.addEntry(url, boundedTitle(view.webContents.getTitle()))
   }
   store.add(onWebContents(view.webContents, 'did-navigate', handleNavigate))
   store.add(onWebContents(view.webContents, 'did-navigate-in-page', handleNavigate))
 
   store.add(
     onWebContents(view.webContents, 'page-title-updated', (_e: unknown, title: string) => {
-      emitContractToRenderer(pageTitleContract, title, tabId)
+      const safeTitle = boundedTitle(title)
+      emitContractToRenderer(pageTitleContract, safeTitle, tabId)
 
       const url = view.webContents.getURL()
-      if (!isInternalPresentationUrl(url)) historyManager.addEntry(url, title, undefined, false)
+      if (isPublishablePageUrl(url)) historyManager.addEntry(url, safeTitle, undefined, false)
     })
   )
 
@@ -168,7 +180,7 @@ export function setupViewEventListeners(view: WebContentsView, tabId: string, de
       }
 
       // Link options
-      if (params.linkURL) {
+      if (params.linkURL && BrowserUrlSchema.safeParse(params.linkURL).success) {
         if (items.length > 0) items.push({ id: '_sep2', label: '', separator: true })
         items.push(
           { id: 'open-link-new-tab', label: 'Open Link in New Tab', data: { url: params.linkURL } },
@@ -227,7 +239,7 @@ export function setupViewEventListeners(view: WebContentsView, tabId: string, de
               view.webContents.selectAll()
               break
             case 'open-link-new-tab':
-              emitContractToRenderer(contextOpenLinkContract, d.url)
+              if (BrowserUrlSchema.safeParse(d.url).success) emitContractToRenderer(contextOpenLinkContract, d.url)
               break
             case 'copy-link':
               clipboard.writeText(d.url)

@@ -86,6 +86,38 @@ describe('tab navigation events', () => {
 
     listeners.dispose()
   })
+
+  it.each(['did-navigate', 'did-navigate-in-page'])('rejects oversized URLs from %s without throwing', (event) => {
+    const { historyManager, listeners, webContents } = createHarness()
+    const url = `http://whitepaper.ton/#${'x'.repeat(20_000)}`
+    webContents.getURL.mockReturnValue(url)
+    expect(() => webContents.emit(event, {}, url, true)).not.toThrow()
+    expect(() => webContents.emit('page-title-updated', {}, 'Page')).not.toThrow()
+    expect(mocks.emitContractToRenderer).not.toHaveBeenCalledWith(
+      expect.objectContaining({ channel: 'page:navigate' }),
+      expect.anything()
+    )
+    expect(historyManager.addEntry).not.toHaveBeenCalled()
+    listeners.dispose()
+  })
+
+  it('accepts the exact URL limit and bounds titles for both IPC and history', () => {
+    const { historyManager, listeners, webContents } = createHarness()
+    const prefix = 'http://whitepaper.ton/#'
+    const url = prefix + 'x'.repeat(16_384 - prefix.length)
+    const title = 't'.repeat(20_000)
+    webContents.getURL.mockReturnValue(url)
+    webContents.getTitle.mockReturnValue(title)
+    expect(() => webContents.emit('did-navigate', {}, url)).not.toThrow()
+    expect(historyManager.addEntry).toHaveBeenCalledWith(url, title.slice(0, 4_096))
+    expect(() => webContents.emit('page-title-updated', {}, title)).not.toThrow()
+    expect(mocks.emitContractToRenderer).toHaveBeenLastCalledWith(
+      expect.objectContaining({ channel: 'page:title' }),
+      title.slice(0, 4_096),
+      'tab-1'
+    )
+    listeners.dispose()
+  })
 })
 
 describe('tab shortcut input', () => {
