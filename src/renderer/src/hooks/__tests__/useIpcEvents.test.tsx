@@ -104,6 +104,9 @@ describe('useIpcEvents', () => {
       historyIndex: 0,
       canGoBack: false,
       canGoForward: false,
+      legacyStorageHistory: false,
+      nativeCanGoBack: false,
+      nativeCanGoForward: false,
     })
     expect(mocks.setNavigation).toHaveBeenCalledWith('http://second.ton/page', false, false)
   })

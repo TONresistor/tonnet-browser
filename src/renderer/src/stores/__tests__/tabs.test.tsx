@@ -37,6 +37,8 @@ const mockElectron = {
     switch: vi.fn().mockResolvedValue(undefined),
   },
   navigate: vi.fn().mockResolvedValue({ success: true }),
+  goBack: vi.fn().mockResolvedValue({ success: true }),
+  goForward: vi.fn().mockResolvedValue({ success: true }),
   settings: {
     get: vi.fn().mockResolvedValue({ homepage: 'ton://start' }),
   },
@@ -423,9 +425,9 @@ describe('tabs store', () => {
     })
 
     it('truncates forward history when navigating to a new URL', async () => {
-      await useTabsStore.getState().addTab('http://page1.ton')
-      await useTabsStore.getState().navigateActiveTab('http://page2.ton')
-      await useTabsStore.getState().navigateActiveTab('http://page3.ton')
+      await useTabsStore.getState().addTab('ton://start')
+      await useTabsStore.getState().navigateActiveTab('ton://settings')
+      await useTabsStore.getState().navigateActiveTab('ton://history')
 
       // Go back to page2
       await useTabsStore.getState().goBack()
@@ -434,33 +436,60 @@ describe('tabs store', () => {
       await useTabsStore.getState().navigateActiveTab('http://page4.ton')
 
       const tab = useTabsStore.getState().tabs[0]
-      expect(tab.history).toEqual(['http://page1.ton', 'http://page2.ton', 'http://page4.ton'])
+      expect(tab.history).toEqual(['ton://start', 'ton://settings', 'http://page4.ton'])
       expect(tab.canGoForward).toBe(false)
     })
   })
 
   describe('goBack / goForward', () => {
+    it('keeps the actual page-link destination as the anchor for an internal round trip', async () => {
+      await useTabsStore.getState().addTab('http://site.ton/a')
+      const id = useTabsStore.getState().activeTabId!
+      useTabsStore.getState().updateTab(id, { url: 'http://site.ton/b', nativeCanGoBack: true })
+      await useTabsStore.getState().navigateActiveTab('ton://settings')
+      await useTabsStore.getState().goBack()
+      expect(mockElectron.navigate).toHaveBeenLastCalledWith('http://site.ton/b', id)
+      await useTabsStore.getState().goForward()
+      expect(mockElectron.navigate).toHaveBeenLastCalledWith('ton://settings', id)
+      expect(mockElectron.goForward).not.toHaveBeenCalled()
+    })
+
+    it('uses Chromium after a page link even when renderer history is empty', async () => {
+      await useTabsStore.getState().addTab('http://site.ton/a')
+      const id = useTabsStore.getState().activeTabId!
+      useTabsStore
+        .getState()
+        .updateTab(id, { url: 'http://site.ton/b', canGoBack: true, nativeCanGoBack: true, nativeCanGoForward: true })
+      mockElectron.navigate.mockClear()
+      await useTabsStore.getState().goBack()
+      await useTabsStore.getState().goForward()
+      expect(mockElectron.goBack).toHaveBeenCalledOnce()
+      expect(mockElectron.goForward).toHaveBeenCalledOnce()
+      expect(mockElectron.navigate).not.toHaveBeenCalled()
+      expect(useTabsStore.getState().tabs[0].url).toBe('http://site.ton/b')
+    })
+
     it('goes back in tab history', async () => {
-      await useTabsStore.getState().addTab('http://page1.ton')
-      await useTabsStore.getState().navigateActiveTab('http://page2.ton')
+      await useTabsStore.getState().addTab('ton://start')
+      await useTabsStore.getState().navigateActiveTab('ton://settings')
 
       await useTabsStore.getState().goBack()
 
       const tab = useTabsStore.getState().tabs[0]
-      expect(tab.url).toBe('http://page1.ton')
+      expect(tab.url).toBe('ton://start')
       expect(tab.canGoBack).toBe(false)
       expect(tab.canGoForward).toBe(true)
     })
 
     it('goes forward in tab history', async () => {
-      await useTabsStore.getState().addTab('http://page1.ton')
-      await useTabsStore.getState().navigateActiveTab('http://page2.ton')
+      await useTabsStore.getState().addTab('ton://start')
+      await useTabsStore.getState().navigateActiveTab('ton://settings')
       await useTabsStore.getState().goBack()
 
       await useTabsStore.getState().goForward()
 
       const tab = useTabsStore.getState().tabs[0]
-      expect(tab.url).toBe('http://page2.ton')
+      expect(tab.url).toBe('ton://settings')
       expect(tab.canGoBack).toBe(true)
       expect(tab.canGoForward).toBe(false)
     })

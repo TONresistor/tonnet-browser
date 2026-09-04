@@ -3,6 +3,8 @@ import type { IpcEventMap, IpcEventChannel } from '@shared/ipc-events'
 /** Electron capabilities owned by browser chrome and tab orchestration. */
 export const browserClient = {
   navigate: (url: string, tabId?: string) => window.electron.navigate(url, tabId),
+  goBack: () => window.electron.goBack(),
+  goForward: () => window.electron.goForward(),
   reload: () => window.electron.reload(),
   stop: () => window.electron.stop(),
   getZoom: () => window.electron.zoom.get(),

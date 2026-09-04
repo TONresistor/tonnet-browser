@@ -39,7 +39,7 @@ vi.mock('electron', () => ({
   BrowserWindow: class {},
   WebContentsView: class {},
 }))
-vi.mock('../browser-view', () => ({ createBrowserView }))
+vi.mock('../browser-view', () => ({ createBrowserView, extractFavicon: vi.fn(async () => null) }))
 vi.mock('../tabs-session', () => ({
   extractDomain,
   TabSessionManager: vi.fn(function () {
@@ -100,6 +100,11 @@ function createView(id: number) {
   const webContents = Object.assign(new EventEmitter(), {
     id,
     close: vi.fn(),
+    stop: vi.fn(),
+    getURL: vi.fn(() => ''),
+    getTitle: vi.fn(() => 'Retained page'),
+    isLoading: vi.fn(() => false),
+    navigationHistory: { canGoBack: vi.fn(() => false), canGoForward: vi.fn(() => false) },
     isDestroyed: vi.fn(() => false),
     loadURL: vi.fn(() => Promise.resolve()),
     getZoomFactor: vi.fn(() => 1),
@@ -117,6 +122,58 @@ const deps = {
 } as never
 
 describe('TabManager lifecycle ownership', () => {
+  it('reveals a retained document without destroying native forward history', async () => {
+    const window = new WindowMock()
+    const manager = new TabManager()
+    manager.attachWindow(window as never, 8080, deps)
+    await manager.createTab('tab-1', 'http://first.ton')
+    const view = manager.getActiveView()!
+    vi.mocked(view.webContents.getURL).mockReturnValue('http://first.ton/')
+    vi.mocked(view.webContents.navigationHistory.canGoForward).mockReturnValue(true)
+    sessions.getTabDomain.mockReturnValue('first.ton')
+    manager.hideAllViews('tab-1')
+    await manager.navigateInTab('tab-1', 'http://first.ton')
+    expect(view.webContents.loadURL).not.toHaveBeenCalled()
+    expect(emitContractToRenderer).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: 'page:title' }),
+      'Retained page',
+      'tab-1'
+    )
+    expect(window.contentView.children).toContain(view)
+    expect(emitContractToRenderer).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: 'page:navigate' }),
+      expect.objectContaining({ canGoForward: true })
+    )
+    manager.dispose()
+  })
+
+  it('reattaches after did-start-navigation followed by same-domain handoff, and after Stop', async () => {
+    vi.useFakeTimers()
+    const window = new WindowMock()
+    const manager = new TabManager()
+    manager.attachWindow(window as never, 8080, deps)
+    await manager.createTab('tab-1', 'http://first.ton')
+    const view = manager.getActiveView()!
+    sessions.getTabDomain.mockReturnValue('first.ton')
+    const navigation = { url: 'http://first.ton/next', isMainFrame: true, isSameDocument: false }
+    view.webContents.emit('did-start-navigation', navigation)
+    expect(window.contentView.children).not.toContain(view)
+    const handoff = setupSecurityHandlers.mock.calls.at(-1)?.[2]
+    expect(handoff?.(navigation.url)).toBe(false)
+    view.webContents.emit('dom-ready')
+    vi.advanceTimersByTime(150)
+    expect(window.contentView.children).toContain(view)
+    view.webContents.emit('did-start-navigation', navigation)
+    expect(window.contentView.children).not.toContain(view)
+    expect(manager.stopActivePage()).toBe(true)
+    expect(window.contentView.children).toContain(view)
+    manager.hideAllViews('tab-1')
+    expect(manager.stopActivePage()).toBe(false)
+    expect(window.contentView.children).not.toContain(view)
+    manager.dispose()
+    vi.useRealTimers()
+  })
+
   beforeEach(() => {
     vi.clearAllMocks()
     sessions.getSessionForDomain.mockReset()

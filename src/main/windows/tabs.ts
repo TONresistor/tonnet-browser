@@ -4,7 +4,7 @@
  */
 
 import { WebContentsView, BrowserWindow } from 'electron'
-import { createBrowserView } from './browser-view'
+import { createBrowserView, extractFavicon } from './browser-view'
 import { extractDomain, TabSessionManager } from './tabs-session'
 import {
   createTabStorageState,
@@ -27,7 +27,15 @@ import { DEFAULT_SETTINGS } from '../../shared/defaults'
 import { createLogger } from '../../shared/logger'
 import { emitContractToRenderer } from '../events/renderer-events'
 import { normalizeUrl } from '../../shared/utils/url'
-import { BrowserUrlSchema, pageZoomContract, tabHistoryResetContract } from '../../shared/ipc-contract/browsing'
+import {
+  BrowserUrlSchema,
+  pageNavigateContract,
+  pageLoadingContract,
+  pageTitleContract,
+  pageFaviconContract,
+  pageZoomContract,
+  tabHistoryResetContract,
+} from '../../shared/ipc-contract/browsing'
 import { ViewRegistry } from './view-registry'
 import { attachViewWhenReady } from './tabs-attach'
 import { loadViewUrl, rebuildViewsForIsolation, safeDetach, setupViewEvents } from './tabs-view-lifecycle'
@@ -277,10 +285,12 @@ export class TabManager {
   }
 
   stopActivePage(): boolean {
+    if (this.views.activeViewId !== this.activeTabId) return false
     const view = this.getActiveView()
     if (!view || view.webContents.isDestroyed()) return false
     if (this.activeTabId) this.cancelNavigation(this.activeTabId)
     view.webContents.stop()
+    this.showActiveView()
     return true
   }
 
@@ -469,12 +479,14 @@ function hideAllViewsFor(manager: TabManager, tabId?: string): void {
   if (activeView) {
     safeDetach(manager, activeView, 'hideAllViews')
   }
+  manager.views.deactivate()
 }
 
 function showActiveViewFor(manager: TabManager): void {
   if (!manager.window) return
   const view = manager.getActiveView()
   if (view) {
+    if (manager.getActiveTabId()) manager.views.activate(manager.getActiveTabId()!)
     manager.window.contentView.addChildView(view)
     updateViewBounds(view, manager.window, manager.sidebarWidth)
   }
@@ -595,7 +607,8 @@ async function navigateInTabFor(manager: TabManager, tabId: string, url: string)
     manager.sessions.updateDomainActivity(domain)
     emitContractToRenderer(tabHistoryResetContract, tabId, navigateUrl)
 
-    if (manager.views.activeViewId === tabId) {
+    if (manager.getActiveTabId() === tabId) {
+      manager.views.activate(tabId)
       manager.emitActiveZoom()
       attachViewWhenReady(manager, newView, tabId, generation)
     }
@@ -605,10 +618,31 @@ async function navigateInTabFor(manager: TabManager, tabId: string, url: string)
     manager.sessions.setTabDomain(tabId, domain)
     manager.sessions.updateDomainActivity(domain)
 
-    if (manager.views.activeViewId === tabId && manager.window) {
+    if (manager.getActiveTabId() === tabId && manager.window) {
+      manager.views.activate(tabId)
       safeDetach(manager, view, 'same-domain navigate')
       manager.window.contentView.addChildView(view)
       updateViewBounds(view, manager.window, manager.sidebarWidth)
+    }
+
+    // Returning from a React route can reveal the retained document without
+    // appending another native history entry or deleting its forward history.
+    if (view.webContents.getURL() === new URL(navigateUrl).href && !view.webContents.isLoading()) {
+      emitContractToRenderer(pageNavigateContract, {
+        tabId,
+        url: view.webContents.getURL(),
+        canGoBack: view.webContents.navigationHistory.canGoBack(),
+        canGoForward: view.webContents.navigationHistory.canGoForward(),
+      })
+      emitContractToRenderer(pageLoadingContract, false, tabId)
+      emitContractToRenderer(pageTitleContract, view.webContents.getTitle().slice(0, 4_096), tabId)
+      const isCurrent = manager.captureNavigation(tabId, view)
+      void extractFavicon(view)
+        .then((favicon) => {
+          if (favicon && isCurrent()) emitContractToRenderer(pageFaviconContract, favicon, tabId)
+        })
+        .catch((error) => log.debug('Retained page favicon unavailable:', error))
+      return true
     }
 
     loadViewUrl(manager, view, tabId, navigateUrl)

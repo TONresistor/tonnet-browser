@@ -4,7 +4,7 @@ import { updateViewBounds } from './tabs-bounds'
 import { loadErrorPage } from './tabs-storage'
 import { setupSecurityHandlers } from './tabs-security'
 import { setupViewEventListeners, type TabEventDeps } from './tabs-events'
-import { setupNavAwareAttach } from './tabs-attach'
+import { attachViewWhenReady, setupNavAwareAttach } from './tabs-attach'
 import { extractDomain, type TabSessionManager } from './tabs-session'
 import { DisposableStore, type IDisposable } from '../utils/disposable'
 import { isAbortedNavigation } from './navigation-failure'
@@ -50,6 +50,11 @@ function createViewEventStore(manager: TabViewLifecycleManager, view: WebContent
           if (!currentDomain) return false
           if (currentDomain === extractDomain(url)) {
             manager.cancelNavigation(tabId)
+            // did-start-navigation precedes will-navigate / will-redirect.
+            // Cancellation invalidates the attachment created by that earlier event.
+            if (manager.views.activeViewId === tabId) {
+              attachViewWhenReady(manager, view, tabId, manager.captureWindowGeneration())
+            }
             return false
           }
           void manager.navigateInTab(tabId, url).catch((error) => log.error('Cross-domain navigation failed:', error))

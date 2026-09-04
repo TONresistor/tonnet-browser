@@ -11,6 +11,7 @@ import { shortId } from '@/lib/id'
 import { createLogger } from '@/logger'
 import { settingsClient } from '@/features/settings/client'
 import { browserClient } from '@/features/browser/client'
+import { selectTabTraversal } from '@/features/browser/tab-history'
 import {
   getInternalPageFavicon,
   getInternalPageTitle,
@@ -26,6 +27,9 @@ const navigationRequestByTab = new Map<string, number>()
 export interface Tab extends BaseTab {
   history: string[]
   historyIndex: number
+  legacyStorageHistory?: boolean
+  nativeCanGoBack?: boolean
+  nativeCanGoForward?: boolean
 }
 
 // Limit history size to prevent memory growth
@@ -79,6 +83,7 @@ async function applyTabNavigation(
   if (!previousTab) return
   const route = updates.url ? resolveInternalRoute(updates.url) : null
   if (route && route.kind !== 'storage-file') updates = { ...updates, isLoading: false }
+  if (updates.url && !route && isInternalUrl(previousTab.url)) updates = { ...updates, favicon: undefined }
   const request = (navigationRequestByTab.get(tabId) ?? 0) + 1
   navigationRequestByTab.set(tabId, request)
   const rollback = Object.fromEntries(
@@ -133,6 +138,9 @@ export const useTabsStore = create<TabsState>((set, get) => ({
       canGoForward: false,
       history: [targetUrl],
       historyIndex: 0,
+      nativeCanGoBack: false,
+      nativeCanGoForward: false,
+      legacyStorageHistory: false,
     }
 
     try {
@@ -259,7 +267,9 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     const internalTitle = getInternalPageTitle(url)
 
     // Update history: truncate forward history and add new URL
-    let newHistory = [...activeTab.history.slice(0, activeTab.historyIndex + 1), url]
+    const previousHistory = activeTab.history.slice(0, activeTab.historyIndex + 1)
+    if (isInternalUrl(url) && !isInternalUrl(activeTab.url)) previousHistory[activeTab.historyIndex] = activeTab.url
+    let newHistory = [...previousHistory, url]
     let newHistoryIndex = newHistory.length - 1
 
     // Trim oldest entries if over limit
@@ -320,9 +330,15 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     if (!activeTabId) return
 
     const activeTab = tabs.find((t) => t.id === activeTabId)
-    if (!activeTab || activeTab.historyIndex <= 0) return
+    if (!activeTab) return
+    const target = selectTabTraversal(activeTab, 'back')
+    if (target === 'native') {
+      await browserClient.goBack()
+      return
+    }
+    if (target === null) return
 
-    const newIndex = activeTab.historyIndex - 1
+    const newIndex = target
     const newUrl = activeTab.history[newIndex]
     const internalTitle = getInternalPageTitle(newUrl)
 
@@ -347,9 +363,15 @@ export const useTabsStore = create<TabsState>((set, get) => ({
     if (!activeTabId) return
 
     const activeTab = tabs.find((t) => t.id === activeTabId)
-    if (!activeTab || activeTab.historyIndex >= activeTab.history.length - 1) return
+    if (!activeTab) return
+    const target = selectTabTraversal(activeTab, 'forward')
+    if (target === 'native') {
+      await browserClient.goForward()
+      return
+    }
+    if (target === null) return
 
-    const newIndex = activeTab.historyIndex + 1
+    const newIndex = target
     const newUrl = activeTab.history[newIndex]
     const internalTitle = getInternalPageTitle(newUrl)
 
