@@ -366,6 +366,7 @@ function createMockRegistry(): ServiceRegistry {
     bridgePermissionStore: { getAllPermissions: vi.fn(() => []), revokePermission: vi.fn() } as any,
     tonConnectService: {
       init: vi.fn(),
+      isAvailable: vi.fn(() => true),
       handleRequest: vi.fn(),
       getSessions: vi.fn(() => []),
       disconnectSession: vi.fn(),

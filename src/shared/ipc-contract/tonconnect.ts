@@ -125,7 +125,7 @@ export const tonConnectGetSessionsContract = defineRequest({
   rateLimit: { kind: 'none' },
   input: z.tuple([]),
   output: z.array(TonConnectSessionSchema),
-  errors: ['SESSION_READ_FAILED'],
+  errors: ['SESSION_READ_FAILED', 'TONCONNECT_UNAVAILABLE'],
   redaction: 'sensitive',
 })
 
@@ -137,7 +137,7 @@ export const tonConnectDisconnectSessionContract = defineRequest({
   rateLimit: { kind: 'none' },
   input: z.tuple([DomainSchema]),
   output: z.object({ success: z.literal(true) }),
-  errors: ['UNKNOWN_APP', 'SESSION_DELETE_FAILED'],
+  errors: ['UNKNOWN_APP', 'SESSION_DELETE_FAILED', 'TONCONNECT_UNAVAILABLE'],
   redaction: 'sensitive',
 })
 

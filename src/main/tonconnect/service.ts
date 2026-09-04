@@ -86,6 +86,7 @@ function platform(): string {
 }
 
 export class TonConnectService {
+  private availability: 'pending' | 'ready' | 'unavailable' = 'pending'
   private wallet: TonConnectWalletPort
   private sessionStore: TonConnectSessionStore
   private approval: TonConnectApprovalPort
@@ -112,8 +113,24 @@ export class TonConnectService {
     this.signingWorkflow = new TonConnectSigningWorkflow(wallet, approval)
   }
 
-  init(): Promise<void> {
-    return this.sessionStore.init()
+  async init(clearSessions = false): Promise<void> {
+    this.availability = 'pending'
+    try {
+      await this.sessionStore.init()
+      if (clearSessions) await this.sessionStore.clear()
+      this.availability = 'ready'
+    } catch (error) {
+      this.availability = 'unavailable'
+      throw error
+    }
+  }
+
+  isAvailable(): boolean {
+    return this.availability === 'ready'
+  }
+
+  private assertAvailable(): void {
+    if (!this.isAvailable()) throw new Error('TON Connect is unavailable')
   }
 
   async handleRequest(
@@ -121,6 +138,11 @@ export class TonConnectService {
     event: TonConnectRequestContext,
     payload: TonConnectRequestPayload
   ): Promise<unknown> {
+    if (!this.isAvailable()) {
+      return payload.method === 'send' || payload.method === 'disconnect'
+        ? rpcError(payload.message?.id ?? '0', TONCONNECT_ERROR.UNKNOWN_APP, 'TON Connect is unavailable')
+        : connectError(CONNECT_ERROR.UNKNOWN_APP, 'TON Connect is unavailable')
+    }
     if (!this.limiter.check(domain)) {
       if (payload?.method === 'send') {
         return rpcError(payload.message?.id ?? '0', TONCONNECT_ERROR.UNKNOWN, 'Rate limit exceeded')
@@ -155,16 +177,20 @@ export class TonConnectService {
   }
 
   getSessions(): TonConnectSession[] {
+    this.assertAvailable()
     return this.sessionStore.list()
   }
 
   async disconnectSession(domain: string): Promise<void> {
+    this.assertAvailable()
     await this.emitDisconnect(domain)
     await this.sessionStore.delete(domain)
     this.limiter.forget(domain)
   }
 
   async clearSessions(): Promise<void> {
+    // Disabling a failed service must not attempt another write to its unreadable store.
+    if (!this.isAvailable()) return
     this.sessionGeneration += 1
     this.limiter.clear()
     for (const domain of this.sessionStore.list().map((s) => s.domain)) {

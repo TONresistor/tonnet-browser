@@ -20,6 +20,7 @@ describe('TonConnectService wallet identity', () => {
       signData: vi.fn(),
     }
     const sessionStore = {
+      init: vi.fn().mockResolvedValue(undefined),
       set: vi.fn(),
       get: vi.fn(),
       delete: vi.fn(),
@@ -36,6 +37,7 @@ describe('TonConnectService wallet identity', () => {
       } as never,
       { track: vi.fn(), emitDisconnect: vi.fn() }
     )
+    await service.init()
     const request = service.handleRequest(
       'app.ton',
       {
@@ -74,6 +76,7 @@ describe('TonConnectService wallet identity', () => {
       signData: vi.fn(),
     }
     const sessionStore = {
+      init: vi.fn().mockResolvedValue(undefined),
       set: vi.fn(),
       get: vi.fn(),
       delete: vi.fn(),
@@ -90,6 +93,7 @@ describe('TonConnectService wallet identity', () => {
       } as never,
       { track: vi.fn(), emitDisconnect: vi.fn() }
     )
+    await service.init()
     const request = service.handleRequest(
       'app.ton',
       {

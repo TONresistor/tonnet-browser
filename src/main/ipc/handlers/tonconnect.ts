@@ -7,7 +7,7 @@ import {
   tonConnectRequestContract,
   type TonConnectRequestPayload,
 } from '../../../shared/ipc-contract/tonconnect'
-import { secureContractHandle, tonsiteContractHandle } from '../contract-handler'
+import { ipcFailure, secureContractHandle, tonsiteContractHandle } from '../contract-handler'
 import { getSetting } from '../../settings'
 import { CONNECT_ERROR, TONCONNECT_ERROR } from '../../tonconnect/types'
 
@@ -33,7 +33,7 @@ export function registerTonConnectHandlers(registry: ServiceRegistry): void {
   tonsiteContractHandle(
     tonConnectAvailabilityContract,
     (event) => registry.tabManager.resolveSenderIdentity(event.sender),
-    () => ({ enabled: getSetting('advanced').tonConnectEnabled })
+    () => ({ enabled: getSetting('advanced').tonConnectEnabled && tonConnectService.isAvailable() })
   )
 
   tonsiteContractHandle(
@@ -48,10 +48,12 @@ export function registerTonConnectHandlers(registry: ServiceRegistry): void {
   )
 
   secureContractHandle(tonConnectGetSessionsContract, () => {
+    if (!tonConnectService.isAvailable()) ipcFailure('TONCONNECT_UNAVAILABLE', 'TON Connect is unavailable')
     return tonConnectService.getSessions()
   })
 
   secureContractHandle(tonConnectDisconnectSessionContract, async (domain) => {
+    if (!tonConnectService.isAvailable()) ipcFailure('TONCONNECT_UNAVAILABLE', 'TON Connect is unavailable')
     await tonConnectService.disconnectSession(domain)
     return { success: true }
   })
