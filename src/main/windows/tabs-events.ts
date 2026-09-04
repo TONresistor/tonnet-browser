@@ -47,6 +47,7 @@ export interface TabEventDeps {
   overlayManager: OverlayManager
   storage: TabStorageState
   cancelNavigation(tabId: string): void
+  captureNavigation(tabId: string, view: WebContentsView): () => boolean
   handleInput: WebContentsInputHandler
 }
 
@@ -100,9 +101,10 @@ export function setupViewEventListeners(view: WebContentsView, tabId: string, de
   // Extract favicon and detect empty storage bag pages
   store.add(
     onWebContents(view.webContents, 'did-finish-load', async () => {
+      const isCurrent = deps.captureNavigation(tabId, view)
       try {
         const favicon = await extractFavicon(view)
-        if (view.webContents.isDestroyed()) return
+        if (!isCurrent()) return
         if (favicon) {
           emitContractToRenderer(pageFaviconContract, favicon, tabId)
         }
@@ -111,17 +113,17 @@ export function setupViewEventListeners(view: WebContentsView, tabId: string, de
       }
 
       try {
-        if (view.webContents.isDestroyed()) return
+        if (!isCurrent()) return
         const pageUrl = view.webContents.getURL()
         const url = new URL(pageUrl)
         if (url.hostname.endsWith('.ton') && !pageUrl.startsWith('data:')) {
           const { textLen, htmlLen } = await view.webContents.executeJavaScript(
             '({ textLen: document.body ? document.body.innerText.trim().length : 0, htmlLen: document.body ? document.body.innerHTML.trim().length : 0 })'
           )
-          if (view.webContents.isDestroyed()) return
+          if (!isCurrent()) return
           if (htmlLen < 50 && textLen < 10) {
             log.info(`Empty page detected for ${url.hostname}, trying storage browser`)
-            loadStorageBrowser(storage, view, url.hostname).catch(() => {
+            loadStorageBrowser(storage, view, url.hostname, isCurrent).catch(() => {
               log.debug('Not a storage bag or no files available')
             })
           }
@@ -137,7 +139,10 @@ export function setupViewEventListeners(view: WebContentsView, tabId: string, de
     onWebContents(
       view.webContents,
       'did-fail-load',
-      (_event: unknown, errorCode: number, errorDescription: string, validatedURL: string) => {
+      (_event: unknown, errorCode: number, errorDescription: string, validatedURL: string, isMainFrame: boolean) => {
+        if (!isMainFrame) return
+        const isCurrent = deps.captureNavigation(tabId, view)
+        if (!isCurrent()) return
         if (errorCode === -3 || errorCode === -2 || errorCode === 0) {
           return
         }
@@ -151,8 +156,8 @@ export function setupViewEventListeners(view: WebContentsView, tabId: string, de
         try {
           const url = new URL(validatedURL)
           if (url.hostname.endsWith('.ton')) {
-            loadStorageBrowser(storage, view, url.hostname).catch(() => {
-              loadErrorPage(view, `${errorDescription} (${errorCode})`, validatedURL)
+            loadStorageBrowser(storage, view, url.hostname, isCurrent).catch(() => {
+              if (isCurrent()) loadErrorPage(view, `${errorDescription} (${errorCode})`, validatedURL)
             })
             return
           }

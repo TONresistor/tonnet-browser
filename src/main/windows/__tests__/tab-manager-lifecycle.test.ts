@@ -76,6 +76,7 @@ vi.mock('../../events/renderer-events', () => ({ emitContractToRenderer }))
 import { TabManager } from '../tabs'
 import { DisposableStore } from '../../utils/disposable'
 import { ensureViewIdentity } from '../tabs-view-lifecycle'
+import { loadErrorPage } from '../tabs-storage'
 
 class WindowMock extends EventEmitter {
   contentView = {
@@ -130,6 +131,43 @@ describe('TabManager lifecycle ownership', () => {
     initStorageListener
       .mockReturnValueOnce({ dispose: firstStorageDispose })
       .mockReturnValueOnce({ dispose: secondStorageDispose })
+  })
+
+  it.each(['ERR_ABORTED (-3)', 'ERR_CONNECTION_REFUSED'])('ignores obsolete load rejection: %s', async (message) => {
+    const manager = new TabManager()
+    manager.attachWindow(new WindowMock() as never, 8080, deps)
+    manager.registerTab('tab-1')
+    const view = createView(1)
+    let reject!: (error: Error) => void
+    view.webContents.loadURL.mockReturnValueOnce(
+      new Promise<void>((_resolve, fail) => {
+        reject = fail
+      })
+    )
+    manager.views.add('tab-1', view as never, new DisposableStore())
+    sessions.getTabDomain.mockReturnValue('first.ton')
+    await manager.navigateInTab('tab-1', 'http://first.ton/old')
+    await manager.navigateInTab('tab-1', 'http://first.ton/new')
+    reject(new Error(message))
+    await Promise.resolve()
+    expect(loadErrorPage).not.toHaveBeenCalled()
+    manager.dispose()
+  })
+
+  it('invalidates pending load recovery on Stop and on tab close', async () => {
+    const manager = new TabManager()
+    manager.attachWindow(new WindowMock() as never, 8080, deps)
+    manager.registerTab('tab-1')
+    const view = createView(1)
+    manager.views.add('tab-1', view as never, new DisposableStore())
+    const owns = manager.captureNavigation('tab-1', view as never)
+    expect(owns()).toBe(true)
+    manager.cancelNavigation('tab-1')
+    expect(owns()).toBe(false)
+    const afterStop = manager.captureNavigation('tab-1', view as never)
+    manager.closeTab('tab-1')
+    expect(afterStop()).toBe(false)
+    manager.dispose()
   })
 
   it('reattaches without retaining views or listeners from the previous window', () => {

@@ -12,6 +12,7 @@ import { createLogger } from '../../shared/logger'
 import { emitContractToRenderer } from '../events/renderer-events'
 import { BrowserUrlSchema, contextOpenLinkContract, pageNavigateContract } from '../../shared/ipc-contract/browsing'
 import { DisposableStore, onWebContents } from '../utils/disposable'
+import { isAbortedNavigation } from './navigation-failure'
 
 const log = createLogger('tabs-security')
 
@@ -25,7 +26,8 @@ async function openValidatedBagFile(
   view: WebContentsView,
   tabId: string,
   basePath: string,
-  filePath: string
+  filePath: string,
+  isCurrent: () => boolean
 ): Promise<void> {
   const fullPath = resolve(`${basePath}/${filePath}`)
   const safeBasePath = resolve(basePath)
@@ -42,8 +44,9 @@ async function openValidatedBagFile(
     return
   }
   try {
+    if (!isCurrent()) return
     await view.webContents.loadFile(realFullPath)
-    if (view.webContents.isDestroyed()) return
+    if (!isCurrent()) return
     emitContractToRenderer(pageNavigateContract, {
       tabId,
       url: `file://${fullPath}`,
@@ -58,7 +61,8 @@ async function openValidatedBagFile(
 function handleNavigation(
   view: WebContentsView,
   details: NavigationDetails,
-  onTopLevelNavigation?: TopLevelNavigationHandler
+  onTopLevelNavigation: TopLevelNavigationHandler | undefined,
+  captureNavigation: () => () => boolean
 ): void {
   const { url } = details
   try {
@@ -87,7 +91,9 @@ function handleNavigation(
     if (normalized !== url) {
       details.preventDefault()
       log.debug(`Normalizing URL: ${url} -> ${normalized}`)
+      const isCurrent = captureNavigation()
       view.webContents.loadURL(normalized).catch((error) => {
+        if (isAbortedNavigation(error) || !isCurrent()) return
         log.error('loadURL failed (normalization):', error)
         loadErrorPage(view, error.message, normalized)
       })
@@ -103,7 +109,8 @@ function handleNavigation(
 export function setupSecurityHandlers(
   view: WebContentsView,
   tabId: string,
-  onTopLevelNavigation?: TopLevelNavigationHandler
+  onTopLevelNavigation?: TopLevelNavigationHandler,
+  captureNavigation: () => () => boolean = () => () => !view.webContents.isDestroyed()
 ): DisposableStore {
   const store = new DisposableStore()
 
@@ -127,12 +134,12 @@ export function setupSecurityHandlers(
           if (slashIdx !== -1) {
             const bp = decodeURIComponent(withoutScheme.slice(0, slashIdx))
             const fp = decodeURIComponent(withoutScheme.slice(slashIdx + 1))
-            void openValidatedBagFile(view, tabId, bp, fp)
+            void openValidatedBagFile(view, tabId, bp, fp, captureNavigation())
           }
           return
         }
 
-        handleNavigation(view, details, onTopLevelNavigation)
+        handleNavigation(view, details, onTopLevelNavigation, captureNavigation)
       }
     )
   )
@@ -142,7 +149,7 @@ export function setupSecurityHandlers(
       view.webContents,
       'will-redirect',
       (details: Electron.Event<Electron.WebContentsWillRedirectEventParams>) => {
-        handleNavigation(view, details, onTopLevelNavigation)
+        handleNavigation(view, details, onTopLevelNavigation, captureNavigation)
       }
     )
   )

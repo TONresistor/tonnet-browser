@@ -23,6 +23,7 @@ export interface TabStorageState {
   readonly storageBagCache: Map<string, string>
   readonly storageBrowserLoading: Set<number>
   readonly storageBrowserEpochs: Map<number, number>
+  nextStorageBrowserEpoch: number
   readonly fileBrowserCache: Map<number, string>
 }
 
@@ -32,6 +33,7 @@ export function createTabStorageState(): TabStorageState {
     storageBagCache: new Map(),
     storageBrowserLoading: new Set(),
     storageBrowserEpochs: new Map(),
+    nextStorageBrowserEpoch: 0,
     fileBrowserCache: new Map(),
   }
 }
@@ -45,8 +47,8 @@ export function disposeTabStorageState(state: TabStorageState): void {
 }
 
 export function cancelStorageBrowserLoad(state: TabStorageState, webContentsId: number): void {
-  const epoch = state.storageBrowserEpochs.get(webContentsId)
-  if (epoch !== undefined) state.storageBrowserEpochs.set(webContentsId, epoch + 1)
+  state.storageBrowserEpochs.delete(webContentsId)
+  state.storageBrowserLoading.delete(webContentsId)
 }
 
 function getStorageManager(state: TabStorageState): StorageManager {
@@ -375,18 +377,27 @@ export async function loadStorageBag(
  * Attempt to load a TON Storage file browser for a .ton domain.
  * Guards against concurrent calls for the same webContents.
  */
-export async function loadStorageBrowser(state: TabStorageState, view: WebContentsView, domain: string): Promise<void> {
+export async function loadStorageBrowser(
+  state: TabStorageState,
+  view: WebContentsView,
+  domain: string,
+  ownsNavigation: () => boolean = () => true
+): Promise<void> {
+  if (!ownsNavigation()) return
   const wcId = view.webContents.id
   if (state.storageBrowserLoading.has(wcId)) return
   state.storageBrowserLoading.add(wcId)
-  const epoch = (state.storageBrowserEpochs.get(wcId) ?? 0) + 1
+  const epoch = ++state.nextStorageBrowserEpoch
   state.storageBrowserEpochs.set(wcId, epoch)
-  const isCurrent = (): boolean => !view.webContents.isDestroyed() && state.storageBrowserEpochs.get(wcId) === epoch
+  const isCurrent = (): boolean =>
+    ownsNavigation() && !view.webContents.isDestroyed() && state.storageBrowserEpochs.get(wcId) === epoch
 
   try {
     await loadStorageBag(state, view, { domain, label: domain, timeout: 30, isCurrent })
   } finally {
-    state.storageBrowserLoading.delete(wcId)
-    state.storageBrowserEpochs.delete(wcId)
+    if (state.storageBrowserEpochs.get(wcId) === epoch) {
+      state.storageBrowserLoading.delete(wcId)
+      state.storageBrowserEpochs.delete(wcId)
+    }
   }
 }

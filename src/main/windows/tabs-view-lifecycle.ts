@@ -6,7 +6,8 @@ import { setupSecurityHandlers } from './tabs-security'
 import { setupViewEventListeners, type TabEventDeps } from './tabs-events'
 import { setupNavAwareAttach } from './tabs-attach'
 import { extractDomain, type TabSessionManager } from './tabs-session'
-import { DisposableStore } from '../utils/disposable'
+import { DisposableStore, type IDisposable } from '../utils/disposable'
+import { isAbortedNavigation } from './navigation-failure'
 import { createLogger } from '../../shared/logger'
 import type { BrowserWindow } from 'electron'
 import type { TabStorageState } from './tabs-storage'
@@ -20,6 +21,7 @@ export interface TabViewLifecycleManager {
   readonly sessions: TabSessionManager
   readonly storage: TabStorageState
   readonly views: ViewRegistry<WebContentsView>
+  readonly pendingAttachments: Map<WebContentsView, IDisposable>
   readonly eventDependencies: TabEventDeps
   readonly defaultZoom: number
   captureWindowGeneration(): number
@@ -29,6 +31,7 @@ export interface TabViewLifecycleManager {
   hasTab(tabId: string): boolean
   cancelNavigation(tabId: string): void
   ownsNavigation(tabId: string, epoch: number): boolean
+  captureNavigation(tabId: string, view: WebContentsView): () => boolean
   navigateInTab(tabId: string, url: string): Promise<boolean>
   emitActiveZoom(): void
 }
@@ -38,17 +41,22 @@ function createViewEventStore(manager: TabViewLifecycleManager, view: WebContent
   try {
     store.add(setupViewEventListeners(view, tabId, manager.eventDependencies))
     store.add(
-      setupSecurityHandlers(view, tabId, (url) => {
-        if (manager.views.get(tabId) !== view) return true
-        const currentDomain = manager.sessions.getTabDomain(tabId)
-        if (!currentDomain) return false
-        if (currentDomain === extractDomain(url)) {
-          manager.cancelNavigation(tabId)
-          return false
-        }
-        void manager.navigateInTab(tabId, url).catch((error) => log.error('Cross-domain navigation failed:', error))
-        return true
-      })
+      setupSecurityHandlers(
+        view,
+        tabId,
+        (url) => {
+          if (manager.views.get(tabId) !== view) return true
+          const currentDomain = manager.sessions.getTabDomain(tabId)
+          if (!currentDomain) return false
+          if (currentDomain === extractDomain(url)) {
+            manager.cancelNavigation(tabId)
+            return false
+          }
+          void manager.navigateInTab(tabId, url).catch((error) => log.error('Cross-domain navigation failed:', error))
+          return true
+        },
+        () => manager.captureNavigation(tabId, view)
+      )
     )
     store.add(setupNavAwareAttach(manager, view, tabId))
     return store
@@ -56,6 +64,15 @@ function createViewEventStore(manager: TabViewLifecycleManager, view: WebContent
     store.dispose()
     throw error
   }
+}
+
+export function loadViewUrl(manager: TabViewLifecycleManager, view: WebContentsView, tabId: string, url: string): void {
+  const isCurrent = manager.captureNavigation(tabId, view)
+  void view.webContents.loadURL(url).catch((error: Error) => {
+    if (isAbortedNavigation(error) || !isCurrent()) return
+    log.error('loadURL failed:', error)
+    loadErrorPage(view, error.message, url)
+  })
 }
 
 export function setupViewEvents(manager: TabViewLifecycleManager, view: WebContentsView, tabId: string): void {
@@ -114,10 +131,7 @@ export async function rebuildViewsForIsolation(
         manager.emitActiveZoom()
       }
       if (item.url) {
-        item.next.webContents.loadURL(item.url).catch((error) => {
-          log.error('Failed to reload view after privacy isolation change:', error)
-          loadErrorPage(item.next, error.message, item.url)
-        })
+        loadViewUrl(manager, item.next, item.tabId, item.url)
       }
     }
   } catch (error) {

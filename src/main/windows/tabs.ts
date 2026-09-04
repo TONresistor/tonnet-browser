@@ -7,7 +7,6 @@ import { WebContentsView, BrowserWindow } from 'electron'
 import { createBrowserView } from './browser-view'
 import { extractDomain, TabSessionManager } from './tabs-session'
 import {
-  loadErrorPage,
   createTabStorageState,
   disposeTabStorageState,
   initStorageListener,
@@ -31,7 +30,7 @@ import { normalizeUrl } from '../../shared/utils/url'
 import { BrowserUrlSchema, pageZoomContract, tabHistoryResetContract } from '../../shared/ipc-contract/browsing'
 import { ViewRegistry } from './view-registry'
 import { attachViewWhenReady } from './tabs-attach'
-import { rebuildViewsForIsolation, safeDetach, setupViewEvents } from './tabs-view-lifecycle'
+import { loadViewUrl, rebuildViewsForIsolation, safeDetach, setupViewEvents } from './tabs-view-lifecycle'
 import { loadBagFileFor, loadStorageBagFor } from './tabs-storage-navigation'
 import { PageZoomController } from './page-zoom'
 import type { WebContentsInputHandler } from './browser-shortcuts'
@@ -43,6 +42,7 @@ export class TabManager {
   readonly sessions = new TabSessionManager()
   readonly storage = createTabStorageState()
   readonly views = new ViewRegistry<WebContentsView>()
+  readonly pendingAttachments = new Map<WebContentsView, IDisposable>()
   private mainWindow: BrowserWindow | null = null
   private proxyPort: number = DEFAULT_SETTINGS.proxyPort
   private resizeHandler: (() => void) | null = null
@@ -113,6 +113,7 @@ export class TabManager {
       overlayManager: deps.overlayManager,
       storage: this.storage,
       cancelNavigation: (tabId) => this.cancelNavigation(tabId),
+      captureNavigation: (tabId, view) => this.captureNavigation(tabId, view),
       handleInput,
     }
     this.sessions.initialize({
@@ -304,7 +305,10 @@ export class TabManager {
 
   beginNavigation(tabId: string): number {
     const view = this.views.get(tabId)
-    if (view) cancelStorageBrowserLoad(this.storage, view.webContents.id)
+    if (view) {
+      this.pendingAttachments.get(view)?.dispose()
+      cancelStorageBrowserLoad(this.storage, view.webContents.id)
+    }
     const epoch = (this.navigationEpochByTab.get(tabId) ?? 0) + 1
     this.navigationEpochByTab.set(tabId, epoch)
     return epoch
@@ -312,6 +316,17 @@ export class TabManager {
 
   ownsNavigation(tabId: string, epoch: number): boolean {
     return this.navigationEpochByTab.get(tabId) === epoch
+  }
+
+  captureNavigation(tabId: string, view: WebContentsView): () => boolean {
+    const generation = this.captureWindowGeneration()
+    const epoch = this.navigationEpochByTab.get(tabId)
+    return () =>
+      this.ownsWindowGeneration(generation) &&
+      this.hasTab(tabId) &&
+      this.views.get(tabId) === view &&
+      !view.webContents.isDestroyed() &&
+      this.navigationEpochByTab.get(tabId) === epoch
   }
 
   cancelNavigation(tabId: string): void {
@@ -537,11 +552,7 @@ async function navigateInTabFor(manager: TabManager, tabId: string, url: string)
         manager.emitActiveZoom()
         attachViewWhenReady(manager, view, tabId, generation)
       }
-      view.webContents.loadURL(navigateUrl).catch((error) => {
-        if (String(error).includes('ERR_ABORTED')) return
-        log.error('loadURL failed:', error)
-        if (view) loadErrorPage(view, error.message, navigateUrl)
-      })
+      loadViewUrl(manager, view, tabId, navigateUrl)
       return true
     } catch (error) {
       if (view && manager.views.get(tabId) === view) manager.views.remove(tabId)
@@ -589,11 +600,7 @@ async function navigateInTabFor(manager: TabManager, tabId: string, url: string)
       attachViewWhenReady(manager, newView, tabId, generation)
     }
 
-    newView.webContents.loadURL(navigateUrl).catch((err) => {
-      if (String(err).includes('ERR_ABORTED')) return
-      log.error('loadURL failed (new view):', err)
-      loadErrorPage(newView, err.message, navigateUrl)
-    })
+    loadViewUrl(manager, newView, tabId, navigateUrl)
   } else {
     manager.sessions.setTabDomain(tabId, domain)
     manager.sessions.updateDomainActivity(domain)
@@ -604,10 +611,7 @@ async function navigateInTabFor(manager: TabManager, tabId: string, url: string)
       updateViewBounds(view, manager.window, manager.sidebarWidth)
     }
 
-    view.webContents.loadURL(navigateUrl).catch((err) => {
-      log.error('loadURL failed:', err)
-      loadErrorPage(view, err.message, navigateUrl)
-    })
+    loadViewUrl(manager, view, tabId, navigateUrl)
   }
 
   return true
