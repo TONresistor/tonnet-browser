@@ -15,7 +15,6 @@ const LandingPage = lazy(() => import('@/components/pages/LandingPage').then((m)
 import { useBrowserStore } from '@/stores/browser'
 import { useTabsStore } from '@/stores/tabs'
 import {
-  useMessengerNetworkEnabled,
   useSavedSidebarWidth,
   useSetPreferenceDraft,
   useShowBookmarksBar,
@@ -40,7 +39,6 @@ import { usePaymentApprovals } from '@/hooks/usePaymentApprovals'
 import { resolveInternalRoute } from '@/app-shell/internal-routes'
 import { InternalRouteContent } from '@/app-shell/InternalRouteContent'
 import { useApplicationBootstrap } from '@/app-shell/useApplicationBootstrap'
-import { useMessengerShortcut } from '@/features/messenger/useMessengerShortcut'
 import { appShellClient } from '@/app-shell/client'
 import { TON_WALLET_PAGE, WALLET_SYSTEM_STORAGE_RETRY_TOKEN } from '@shared/constants'
 
@@ -57,7 +55,6 @@ function App() {
   const showStatusBar = useShowStatusBar()
   const tabOrientation = useTabOrientation()
   const savedSidebarWidth = useSavedSidebarWidth()
-  const messengerNetworkEnabled = useMessengerNetworkEnabled()
   const setDraft = useSetPreferenceDraft()
 
   // Track current sidebar width in real-time during resize
@@ -66,7 +63,6 @@ function App() {
   const [walletSidebarWidth, setWalletSidebarWidth] = useState(320)
   const [cocoonSidebarOpen, setCocoonSidebarOpen] = useState(false)
   const [cocoonSidebarWidth, setCocoonSidebarWidth] = useState(320)
-  const messengerShortcutVisible = useMessengerShortcut(messengerNetworkEnabled)
   const walletSystemStorageRetry = useRef(
     new URLSearchParams(window.location.search).has(WALLET_SYSTEM_STORAGE_RETRY_TOKEN)
   )
@@ -189,18 +185,16 @@ function App() {
             >
               <AppIcon name="cocoon" className="h-5 w-5" />
             </Button>
-            {messengerShortcutVisible && (
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-7 w-7 rounded-full text-icon hover:text-icon"
-                onClick={() => openOrSwitchToTab('ton://chat')}
-                title={t('tooltips.messenger')}
-                aria-label={t('tooltips.messenger')}
-              >
-                <AppIcon name="messenger" className="h-5 w-5" />
-              </Button>
-            )}
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 rounded-full text-icon hover:text-icon"
+              onClick={() => openOrSwitchToTab('ton://chat')}
+              title={t('tooltips.messenger')}
+              aria-label={t('tooltips.messenger')}
+            >
+              <AppIcon name="messenger" className="h-5 w-5" />
+            </Button>
             <Button
               variant="ghost"
               size="icon"

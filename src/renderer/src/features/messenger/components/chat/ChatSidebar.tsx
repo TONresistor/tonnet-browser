@@ -54,9 +54,9 @@ function RoomRow({
   onSelect: (room: FollowedRoom) => void
   onRemove: (room: string) => void
 }): React.JSX.Element {
-  const label = roomLabel(room.room)
+  const label = room.name || room.alias || roomLabel(room.room)
   const time = preview ? formatChatTime(preview.ts) : ''
-  const subtitle = preview?.text ?? room.room
+  const subtitle = preview?.text ?? room.alias ?? room.room
   return (
     <div
       role="option"
@@ -78,7 +78,7 @@ function RoomRow({
         className="grid h-12 w-12 shrink-0 place-items-center rounded-full text-[17px] font-semibold text-identity-foreground"
         style={{ backgroundColor: avatarColor(room.room) }}
       >
-        {initial(room.room)}
+        {initial(label)}
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
@@ -158,7 +158,7 @@ function DmRow({
     >
       <span
         className="grid h-12 w-12 shrink-0 place-items-center rounded-full text-[17px] font-semibold text-identity-foreground"
-        style={{ backgroundColor: avatarColor(dm.address ?? dm.peerKey) }}
+        style={{ backgroundColor: avatarColor(dm.peerKey) }}
       >
         {initial(dm.name)}
       </span>
@@ -172,7 +172,7 @@ function DmRow({
             )}
           >
             <span className="min-w-0 truncate">{dm.name}</span>
-            <IdentityBadge identity={{ tier: dm.domain ? 'domain' : dm.address ? 'wallet' : 'device' }} />
+            <IdentityBadge identity={{ tier: dm.domain ? 'domain' : 'identity' }} />
           </span>
           {time && (
             <span
@@ -265,9 +265,13 @@ function ChatSidebar({
   }, [resizing])
 
   const q = query.trim().toLowerCase()
-  const filteredRooms = q ? rooms.filter((r) => (roomLabel(r.room) + ' ' + r.room).toLowerCase().includes(q)) : rooms
+  const filteredRooms = q
+    ? rooms.filter((room) =>
+        `${room.name ?? ''} ${room.alias ?? ''} ${roomLabel(room.room)} ${room.room}`.toLowerCase().includes(q)
+      )
+    : rooms
   const filteredDms = q
-    ? dms.filter((d) => (d.name + ' ' + d.address + ' ' + (d.domain ?? '')).toLowerCase().includes(q))
+    ? dms.filter((d) => (d.name + ' ' + d.peerKey + ' ' + (d.domain ?? '')).toLowerCase().includes(q))
     : dms
 
   return (
@@ -346,7 +350,7 @@ function ChatSidebar({
                 <DmRow
                   key={d.peerKey}
                   dm={d}
-                  active={d.address === activeDm}
+                  active={d.peerKey === activeDm}
                   onSelect={onSelectDm}
                   onRemove={onRemoveDm}
                 />

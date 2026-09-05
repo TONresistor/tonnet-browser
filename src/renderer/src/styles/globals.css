@@ -123,7 +123,7 @@
   :root,
   [data-theme='resistance-dog'] {
     /* Resistance Dog Theme (Default) */
-    --background: 210 26% 13%; /* #17212b */
+    --background: 213 22% 18%; /* #242d38 */
     --background-secondary: 210 32% 9%; /* #0e1621 */
     --foreground: 0 0% 96%; /* #f5f5f5 */
     --heading: 0 0% 96%;
@@ -193,7 +193,7 @@
 
     /* Elevation */
     --elevation-0: 210 32% 9%;
-    --elevation-1: 210 26% 13%;
+    --elevation-1: 213 22% 18%;
     --elevation-2: 210 24% 16%;
     --elevation-3: 210 22% 20%;
     --elevation-4: 210 20% 24%;

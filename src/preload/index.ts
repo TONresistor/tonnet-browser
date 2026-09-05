@@ -114,10 +114,11 @@ import type {
   chatClaimDomainContract,
   chatClearDomainContract,
   chatConnectContract,
-  chatCreateRoomContract,
   chatDetectDomainsContract,
   chatDisconnectContract,
   chatDmSendContract,
+  chatMutateContract,
+  chatTimelineBeforeContract,
   chatIdentityContract,
   chatLinkIdentityContract,
   chatResetIdentityContract,
@@ -393,8 +394,16 @@ const electronAPI = {
     send: (text: string) => invokeChannel<typeof chatSendContract>(IPC_CHANNELS.CHAT_SEND, text),
     dmSend: (peerKey: string, text: string) =>
       invokeChannel<typeof chatDmSendContract>(IPC_CHANNELS.CHAT_DM_SEND, peerKey, text),
-    createRoom: (display: string) =>
-      invokeChannel<typeof chatCreateRoomContract>(IPC_CHANNELS.CHAT_CREATE_ROOM, display),
+    mutate: (mutation: {
+      action: 'metadata' | 'pin' | 'unpin' | 'moderator-grant' | 'moderator-revoke' | 'write-policy'
+      name?: string
+      description?: string
+      messageId?: string
+      subjectKey?: string
+      anyoneCanWrite?: boolean
+    }) => invokeChannel<typeof chatMutateContract>(IPC_CHANNELS.CHAT_MUTATE, mutation),
+    timelineBefore: (beforeSeqno: number, limit?: number) =>
+      invokeChannel<typeof chatTimelineBeforeContract>(IPC_CHANNELS.CHAT_TIMELINE_BEFORE, beforeSeqno, limit),
     disconnect: () => invokeChannel<typeof chatDisconnectContract>(IPC_CHANNELS.CHAT_DISCONNECT),
     identity: () => invokeChannel<typeof chatIdentityContract>(IPC_CHANNELS.CHAT_IDENTITY),
     linkIdentity: () => invokeChannel<typeof chatLinkIdentityContract>(IPC_CHANNELS.CHAT_IDENTITY_LINK),

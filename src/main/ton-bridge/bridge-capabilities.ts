@@ -94,8 +94,12 @@ export class BridgeOverlayClient {
   }
 
   async leaveAndDisconnect(overlayIdB64: string, peerId: string): Promise<void> {
-    await this.request('overlay.leave', { overlay_id: overlayIdB64 }).catch(() => {})
+    await this.leave(overlayIdB64)
     await this.request('adnl.disconnect', { peer_id: peerId }).catch(() => {})
+  }
+
+  async leave(overlayIdB64: string): Promise<void> {
+    await this.request('overlay.leave', { overlay_id: overlayIdB64 }).catch(() => {})
   }
 
   onMessage(callback: (data: { overlay_id: string; message: string; trusted?: boolean }) => void): () => void {

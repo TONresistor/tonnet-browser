@@ -4,13 +4,14 @@ This document describes how to build the platform binaries used by Tonnet Browse
 
 ## Overview
 
-Tonnet Browser requires five binary components:
+Tonnet Browser requires six binary components:
 
 1. **tonutils-proxy** - HTTP proxy for TON sites (from TONresistor/Tonutils-Proxy)
 2. **tonutils-storage** - TON storage daemon (from xssnick/tonutils-storage)
 3. **tonutils-bridge** - standalone WebSocket-ADNL bridge (from TONresistor/tonutils-bridge)
 4. **gocoon** - Cocoon CLI used for wallet/channel operations (from TONresistor/gocoon)
 5. **cocoon-runner** - Cocoon local runner used by the browser runtime (from TONresistor/gocoon)
+6. **tonnet-messenger** - standalone Messenger leaf client (from TONresistor/tonnet-messenger)
 
 ## Supported Platforms
 
@@ -108,18 +109,21 @@ resources/
       tonutils-bridge       # Universal binary
       gocoon                # Universal binary
       cocoon-runner         # Universal binary
+      tonnet-messenger      # Universal binary
     linux/
       tonutils-proxy
       tonutils-storage
       tonutils-bridge
       gocoon
       cocoon-runner
+      tonnet-messenger
     win/
       tonutils-proxy.exe
       tonutils-storage.exe
       tonutils-bridge.exe
       gocoon.exe
       cocoon-runner.exe
+      tonnet-messenger.exe
 ```
 
 ## Building Individual Components

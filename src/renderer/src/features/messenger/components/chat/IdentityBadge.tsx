@@ -14,7 +14,7 @@ function CheckBadge({ className }: { className?: string }): React.JSX.Element {
 }
 
 export function IdentityBadge({ identity }: { identity: Pick<ChatIdentityInfo, 'tier'> }): React.JSX.Element | null {
-  if (identity.tier === 'device') return null
+  if (identity.tier === 'identity') return null
   return <CheckBadge className={identity.tier === 'domain' ? 'text-primary' : 'text-muted-foreground/70'} />
 }
 

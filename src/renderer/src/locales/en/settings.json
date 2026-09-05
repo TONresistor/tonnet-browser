@@ -433,8 +433,8 @@
     "diagnosticsCopied": "Copied",
     "experimental": {
       "title": "Experimental features",
-      "messenger": "Messenger",
-      "messengerDesc": "Enable experimental chat. This automatically enables ADNL, Overlay and DHT on the bridge.",
+      "messenger": "Start Messenger with Browser",
+      "messengerDesc": "Start the Messenger client automatically when Browser opens.",
       "unicodeDomains": "Unicode domains (IDN)",
       "unicodeDomainsDesc": "Show Russian, emoji, and other international domains instead of xn-- Punycode. The Punycode is revealed while editing.",
       "tonConnect": "Built-in TON Connect wallet",

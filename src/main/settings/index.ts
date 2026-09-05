@@ -23,7 +23,7 @@ import { hasExplicitUndefined } from '../../shared/schemas'
 import { PAGE_ZOOM } from '../../shared/constants'
 import { createLogger } from '../../shared/logger'
 const log = createLogger('settings')
-const SETTINGS_SCHEMA_VERSION = 3
+const SETTINGS_SCHEMA_VERSION = 4
 
 // Re-export settings types for consumers that import from this module
 export type {
@@ -279,6 +279,26 @@ export function migratePageZoom(raw: unknown): { migrated: boolean; data: unknow
   }
 }
 
+/** Preserve the former Messenger opt-in as the new startup preference. */
+export function migrateMessengerAutostart(raw: unknown): { migrated: boolean; data: unknown } {
+  if (!isPlainObject(raw) || !isPlainObject(raw.messenger) || !('networkEnabled' in raw.messenger)) {
+    return { migrated: false, data: raw }
+  }
+  const { networkEnabled, ...messenger } = raw.messenger
+  return {
+    migrated: true,
+    data: {
+      ...raw,
+      messenger: {
+        ...messenger,
+        ...(typeof messenger.autostart === 'boolean'
+          ? {}
+          : { autostart: typeof networkEnabled === 'boolean' ? networkEnabled : false }),
+      },
+    },
+  }
+}
+
 function assertSettingsVersion(raw: unknown): void {
   if (!raw || typeof raw !== 'object') return
   const version = (raw as { schemaVersion?: unknown }).schemaVersion
@@ -295,9 +315,10 @@ function migrateAll(raw: unknown): { migrated: boolean; data: unknown } {
   const r4 = migrateThemeColors(r3.data)
   const r5 = migrateDuplicatePorts(r4.data)
   const r6 = migratePageZoom(r5.data)
+  const r7 = migrateMessengerAutostart(r6.data)
   return {
-    migrated: r1.migrated || r2.migrated || r3.migrated || r4.migrated || r5.migrated || r6.migrated,
-    data: r6.data,
+    migrated: r1.migrated || r2.migrated || r3.migrated || r4.migrated || r5.migrated || r6.migrated || r7.migrated,
+    data: r7.data,
   }
 }
 

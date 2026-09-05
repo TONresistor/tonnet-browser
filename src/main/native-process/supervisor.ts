@@ -14,6 +14,8 @@ export interface NativeProcessSpec {
   onRawLine?(entry: NativeRawLogLine): void
   onExit?(code: number | null): void
   onError?(error: Error): void
+  /** stdout carries a private machine protocol and must not enter logs or readiness capture. */
+  protocolStdout?: boolean
 }
 
 export type NativeProcessState = 'stopped' | 'starting' | 'running' | 'stopping' | 'crashed'
@@ -76,8 +78,10 @@ export class NativeProcessSupervisor {
 
     const nativeLogs = nativeLogRouter.createSession(spec.name, child.pid, spec.onLine, spec.onRawLine)
     const onStdout = (data: Buffer): void => {
-      this.captureOutput(data)
-      nativeLogs.stdout(data)
+      if (!spec.protocolStdout) {
+        this.captureOutput(data)
+        nativeLogs.stdout(data)
+      }
       spec.onStdout?.(data)
     }
     const onStderr = (data: Buffer): void => {

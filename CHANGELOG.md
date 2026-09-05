@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Standalone Messenger 0.4 client with persistent public rooms, verified history, room moderation and online encrypted direct messages.
+- Room joining by canonical key or TON DNS alias, separate presence snapshots and pinned-message navigation.
+
+### Changed
+
+- Messenger owns its identity and connects directly over TON QUIC, independently of the Browser proxy and Bridge.
+- The former Messenger network opt-in becomes an autostart preference; opening Messenger starts its client on demand.
+- The default Resistance Dog background uses the updated dark palette.
+- Bundled helpers retain Bridge v0.5.1 and GoCoon v0.3.0, with Messenger pinned to v0.4.0+dev.b164900.
+
+### Compatibility
+
+- Messenger 0.4 rooms and identities are incompatible with the legacy overlay chat. Existing standalone-client state is preserved; legacy room names, wallet attribution and offline DM history are not converted.
+- Browser settings migrate to schema 4. Use a pre-upgrade profile backup when returning to an older build that only supports schema 3.
+
 ## [2.6.0] - 2026-08-30
 
 ### Added

@@ -35,17 +35,13 @@ export class BridgeManager extends EventEmitter {
     return dir
   }
 
-  async start(
-    wsPort: number,
-    settings: { verbosity: number; messengerNetworkEnabled: boolean },
-    signal?: AbortSignal
-  ): Promise<void> {
+  async start(wsPort: number, settings: { verbosity: number }, signal?: AbortSignal): Promise<void> {
     const startedAt = Date.now()
     if (signal?.aborted) throw new Error('Bridge start aborted')
     const bridgeBinPath = getBinaryPath('tonutils-bridge')
     const bridgeWorkDir = await this.getWorkDir()
     if (signal?.aborted) throw new Error('Bridge start aborted')
-    await applyBridgeDefaults(bridgeWorkDir, { enableChatNamespaces: settings.messengerNetworkEnabled })
+    await applyBridgeDefaults(bridgeWorkDir)
     if (signal?.aborted) throw new Error('Bridge start aborted')
     const verbosity = Math.max(0, Math.min(3, settings.verbosity))
     const bridgeArgs = ['-addr', `127.0.0.1:${wsPort}`, '-data-dir', bridgeWorkDir, '-verbosity', String(verbosity)]

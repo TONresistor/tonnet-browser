@@ -3,331 +3,395 @@ import {
   chatClearDomainContract,
   chatConnectionContract,
   chatConnectContract,
-  chatCreateRoomContract,
   chatDetectDomainsContract,
   chatDisconnectContract,
+  chatDmMessageContract,
   chatDmSendContract,
   chatIdentityContract,
   chatLinkIdentityContract,
+  chatMutateContract,
   chatResetIdentityContract,
+  chatRoomPresenceContract,
+  chatRoomStateContract,
   chatSendContract,
+  chatTimelineBeforeContract,
+  chatTimelineContract,
+  type ChatRoomState,
+  type ChatRoomConnection,
+  type ChatRoomPresence,
+  type ChatTimelineItem,
+  type ChatTimelinePage,
 } from '../../../shared/ipc-contract/chat'
-import { normalizeRoom, normalizeNodeId, parseRoomName } from '../../chat/room'
-import { ChatMembership } from '../../chat/membership'
-import { MAX_TEXT_BYTES } from '../../chat/envelope'
-import { sealDM } from '../../chat/dm'
-import { ChatIdentityManager } from '../../chat/identity'
-import type { OwnChatIdentity } from '../../../shared/types'
-import { ownedDomains } from '../../chat/detect'
-import { getSetting } from '../../settings'
-import { isTonDomain } from '../../../shared/utils/ton'
-import { toError, log } from './shared'
-import { ipcFailure, secureContractHandle } from '../contract-handler'
+import type { OwnChatIdentity, ChatIdentityInfo } from '../../../shared/types'
 import { emitContractToRenderer } from '../../events/renderer-events'
+import { ipcFailure, secureContractHandle } from '../contract-handler'
 import type { ServiceRegistry } from '../../services'
-import type { ChatRuntimeSession } from '../../chat/session-controller'
-import { buildSigned, connectRoom, experimentalGatedRoomsEnabled, sendEnvelope, wireNick } from './chat-connection'
+import { MessengerRpcError } from '../../messenger/client-manager'
+import { onEmitter } from '../../utils/disposable'
 
-function truncateUtf8(s: string, maxBytes: number): string {
-  const raw = Buffer.from(s, 'utf8')
-  if (raw.length <= maxBytes) return s
-  return raw
-    .subarray(0, maxBytes)
-    .toString('utf8')
-    .replace(/\uFFFD+$/u, '')
+interface RpcIdentity {
+  key: string
+  name: string
+  domain?: string
 }
 
-async function ownIdentityView(identity: ChatIdentityManager): Promise<OwnChatIdentity> {
-  const id = await identity.ownIdentity()
-  if (getSetting('messenger').attachWalletIdentity) return id
-  return { deviceKey: id.deviceKey, linked: false, declined: false, walletReady: id.walletReady }
+interface RpcActor {
+  key: string
+  name: string
+  domain?: string
+}
+
+interface RpcEvent {
+  room: string
+  event_id: string
+  seqno: string
+  message_id: string
+  committed_at: number
+  actor: RpcActor
+  kind:
+    | 'message'
+    | 'pin'
+    | 'unpin'
+    | 'metadata'
+    | 'write-policy'
+    | 'admin-grant'
+    | 'admin-revoke'
+    | 'moderator-grant'
+    | 'moderator-revoke'
+  text?: string
+  target_message_id?: string
+  subject_key?: string
+  name?: string
+  description?: string
+  write_policy?: 'everyone' | 'admins'
+}
+
+interface RpcState {
+  room: string
+  name: string
+  description: string
+  write_policy: 'everyone' | 'admins'
+  admins: string[]
+  moderators: string[]
+  pinned_messages: string[]
+  revision_seqno: string
+  latest_seqno: string
+}
+
+interface RpcConnection {
+  node_role: 'sequencer' | 'relay'
+}
+
+interface RpcPresence {
+  room: string
+  online_users: number
+}
+
+function ownIdentity(value: RpcIdentity): OwnChatIdentity {
+  return { identityKey: value.key, name: value.name, domain: value.domain }
+}
+
+function identityView(actor: RpcActor): ChatIdentityInfo {
+  const fingerprint = actor.key.slice(0, 10)
+  if (actor.domain) return { tier: 'domain', name: actor.domain, domain: actor.domain, fingerprint }
+  return { tier: 'identity', name: actor.name || `#${fingerprint}`, fingerprint }
+}
+
+function timelineItem(value: RpcEvent, ownKey?: string): ChatTimelineItem {
+  const base = {
+    room: value.room,
+    eventId: value.event_id,
+    seqno: Number(value.seqno),
+    ts: value.committed_at,
+    actorKey: value.actor.key,
+  }
+  switch (value.kind) {
+    case 'message':
+      return {
+        ...base,
+        kind: 'message',
+        messageId: value.message_id,
+        nick: value.actor.name,
+        text: value.text ?? '',
+        self: value.actor.key === ownKey,
+        identity: identityView(value.actor),
+      }
+    case 'pin':
+    case 'unpin':
+      return { ...base, kind: value.kind, targetMessageId: value.target_message_id ?? '0' }
+    case 'metadata':
+      return { ...base, kind: 'metadata', name: value.name ?? '', description: value.description ?? '' }
+    case 'write-policy':
+      return { ...base, kind: 'write-policy', anyoneCanWrite: value.write_policy === 'everyone' }
+    default:
+      return { ...base, kind: value.kind, subjectKey: value.subject_key ?? '' }
+  }
+}
+
+function roomState(value: RpcState): ChatRoomState {
+  return {
+    roomId: value.room,
+    name: value.name,
+    description: value.description,
+    writePolicy: value.write_policy,
+    admins: value.admins,
+    moderators: value.moderators,
+    pinnedMessages: value.pinned_messages,
+    revisionSeqno: Number(value.revision_seqno),
+    latestSeqno: Number(value.latest_seqno),
+  }
+}
+
+function roomConnection(value: RpcConnection): ChatRoomConnection {
+  return { nodeRole: value.node_role }
+}
+
+function roomPresence(value: RpcPresence): ChatRoomPresence {
+  return { roomId: value.room, onlineUsers: value.online_users }
+}
+
+function publicFailure(error: unknown): never {
+  if (error instanceof MessengerRpcError) {
+    const code =
+      error.code === 'SEQUENCER_UNAVAILABLE'
+        ? 'CHAT_SEQUENCER_UNAVAILABLE'
+        : error.code === 'CLOCK_SKEW'
+          ? 'CHAT_CLOCK_SKEW'
+          : error.code
+    ipcFailure(code, error.message, true, error)
+  }
+  ipcFailure(
+    'CHAT_OPERATION_FAILED',
+    error instanceof Error ? error.message : 'Messenger operation failed',
+    true,
+    error
+  )
 }
 
 export function registerChatHandlers(registry: ServiceRegistry): void {
-  const { walletManager, tonBridgeProviders, chatSessionController, tonIndexerClient } = registry
-  const identity = new ChatIdentityManager(walletManager)
-  const membership = new ChatMembership()
-  const recentGrants = new Map<string, number>()
-  let connectionGeneration = 0
+  const manager = registry.messengerClientManager
+  let activeRoom: string | null = null
+  let identity: OwnChatIdentity | null = null
 
-  const establish = (
-    room: string,
-    bootstrap: string | undefined,
-    markJoining: () => void
-  ): Promise<ChatRuntimeSession> => {
-    if (!getSetting('messenger').networkEnabled) {
-      ipcFailure('MESSENGER_DISABLED', 'Messenger networking is disabled')
-    }
-    const bridge = tonBridgeProviders.messenger.getBridge()
-    if (!bridge) ipcFailure('BRIDGE_DISCONNECTED', 'Bridge not connected')
-    return connectRoom(
-      chatSessionController,
-      recentGrants,
-      bridge,
-      identity,
-      membership,
-      (d) => walletManager.resolveDomain(d),
-      room,
-      bootstrap,
-      markJoining,
-      beginReconnect
+  const getIdentity = async (): Promise<OwnChatIdentity> => {
+    const value = await manager.request<RpcIdentity>('identity.get')
+    identity = ownIdentity(value)
+    return identity
+  }
+
+  registry.lifecycleRegistrations.add(
+    onEmitter(manager, 'room.event', (raw: RpcEvent) => {
+      emitContractToRenderer(chatTimelineContract, timelineItem(raw, identity?.identityKey))
+    })
+  )
+  registry.lifecycleRegistrations.add(
+    onEmitter(manager, 'room.state', (raw: RpcState) => emitContractToRenderer(chatRoomStateContract, roomState(raw)))
+  )
+  registry.lifecycleRegistrations.add(
+    onEmitter(manager, 'room.presence', (raw: RpcPresence) =>
+      emitContractToRenderer(chatRoomPresenceContract, roomPresence(raw))
     )
-  }
-
-  function beginReconnect(deadSession: ChatRuntimeSession): void {
-    if (chatSessionController.session !== deadSession) return
-    const generation = connectionGeneration
-    const delays = [1_000, 2_000, 4_000, 8_000, 15_000]
-    void (async () => {
-      let attempt = 0
-      while (generation === connectionGeneration && getSetting('messenger').networkEnabled) {
-        attempt++
+  )
+  registry.lifecycleRegistrations.add(
+    onEmitter(manager, 'dm.message', (raw: Record<string, unknown>) => {
+      const peerKey = String(raw.peer_key ?? '')
+      const authorName = String(raw.author_name ?? '')
+      const domain = typeof raw.domain === 'string' ? raw.domain : undefined
+      emitContractToRenderer(chatDmMessageContract, {
+        room: String(raw.room ?? ''),
+        id: String(raw.id ?? ''),
+        peerKey,
+        text: String(raw.text ?? ''),
+        ts: Number(raw.timestamp ?? 0),
+        identity: domain
+          ? { tier: 'domain', name: domain, domain, fingerprint: peerKey.slice(0, 10) }
+          : { tier: 'identity', name: authorName || `#${peerKey.slice(0, 10)}`, fingerprint: peerKey.slice(0, 10) },
+      })
+    })
+  )
+  registry.lifecycleRegistrations.add(
+    onEmitter(manager, 'identity.changed', (raw: RpcIdentity) => {
+      identity = ownIdentity(raw)
+    })
+  )
+  registry.lifecycleRegistrations.add(
+    onEmitter(manager, 'room.connection', (raw: Record<string, unknown>) => {
+      const room = String(raw.room ?? '')
+      const status = String(raw.status ?? '')
+      if (status === 'reconnecting') {
         emitContractToRenderer(chatConnectionContract, {
-          room: deadSession.room,
+          room,
           status: 'reconnecting',
-          attempt,
+          attempt: Number(raw.attempt ?? 1),
         })
-        const baseDelay = delays[Math.min(attempt - 1, delays.length - 1)]
-        await new Promise((resolve) => setTimeout(resolve, baseDelay + Math.floor(Math.random() * 500)))
-        if (generation !== connectionGeneration) return
-        try {
-          await chatSessionController.connect(deadSession.room, ({ markJoining }) =>
-            establish(deadSession.room, deadSession.bootstrap, markJoining)
+      } else if (status === 'error') {
+        emitContractToRenderer(chatConnectionContract, {
+          room,
+          status: 'error',
+          code: 'ROOM_UNAVAILABLE',
+          message: String(raw.message ?? 'Room unavailable'),
+          retryable: Boolean(raw.retryable ?? true),
+        })
+      } else if (status === 'connected' && raw.state) {
+        void manager
+          .request<{ items: RpcEvent[]; has_more: boolean }>('room.getTimeline', { room, limit: 100 })
+          .then((page) =>
+            emitContractToRenderer(chatConnectionContract, {
+              room,
+              status: 'connected',
+              state: roomState(raw.state as RpcState),
+              connection: roomConnection(raw.connection as RpcConnection),
+              presence: roomPresence(raw.presence as RpcPresence),
+              timeline: {
+                items: page.items.map((item) => timelineItem(item, identity?.identityKey)),
+                hasMore: page.has_more,
+              },
+            })
           )
-          if (generation !== connectionGeneration) return
-          emitContractToRenderer(chatConnectionContract, { room: deadSession.room, status: 'connected' })
-          return
-        } catch (error) {
-          log.event('warn', 'chat.reconnect.failed', 'chat reconnect attempt failed', {
-            attempt,
-            error: toError(error),
-          })
-        }
+          .catch(() => {})
       }
-      if (generation === connectionGeneration) {
-        emitContractToRenderer(chatConnectionContract, { room: deadSession.room, status: 'error' })
-      }
-    })()
-  }
+    })
+  )
 
   secureContractHandle(chatConnectContract, async (roomArg?: string, nodeArg?: string) => {
-    connectionGeneration++
-    let room: string
-    let bootstrap: string | undefined
+    const reference = String(roomArg ?? '').trim()
+    if (!reference) ipcFailure('INVALID_ROOM', 'Invalid room key or domain')
     try {
-      room = normalizeRoom(roomArg)
-    } catch {
-      ipcFailure('INVALID_ROOM', 'Invalid room name')
+      identity ??= await getIdentity()
+      const joined = await manager.request<{
+        room: string
+        state: RpcState
+        connection: RpcConnection
+        presence: RpcPresence
+        timeline: { items: RpcEvent[]; has_more: boolean }
+      }>('room.join', { reference, bootstrap: nodeArg?.trim() || undefined })
+      activeRoom = joined.room
+      return {
+        connected: true as const,
+        room: joined.room,
+        via: nodeArg ? ('node' as const) : ('dht' as const),
+        state: roomState(joined.state),
+        connection: roomConnection(joined.connection),
+        presence: roomPresence(joined.presence),
+        timeline: {
+          items: joined.timeline.items.map((item) => timelineItem(item, identity?.identityKey)),
+          hasMore: joined.timeline.has_more,
+        },
+      }
+    } catch (error) {
+      publicFailure(error)
     }
-    try {
-      bootstrap = normalizeNodeId(nodeArg)
-    } catch {
-      ipcFailure('INVALID_NODE_ID', 'Invalid node id')
-    }
-
-    const connected = await chatSessionController.connect(room, ({ markJoining }) =>
-      establish(room, bootstrap, markJoining)
-    )
-    return { connected: true as const, room: connected.room, via: connected.via }
   })
 
   secureContractHandle(chatSendContract, async (text) => {
-    const bridge = tonBridgeProviders.messenger.getBridge()
-    const session = chatSessionController.session
-    if (!bridge || !session) ipcFailure('CHAT_DISCONNECTED', 'Chat not connected')
-    if (session.gated && !session.cert) {
-      return { sent: false as const, pendingMembership: true, identity: await ownIdentityView(identity) }
-    }
-    const attach = getSetting('messenger').attachWalletIdentity
-    const proof = attach ? await identity.ensureProof() : null
-    const domain = attach ? await identity.claimedDomain() : null
-    const seed = await identity.deviceSeed()
-    const env = buildSigned(
-      seed,
-      {
-        type: 'msg',
-        nick: wireNick(proof, domain),
-        text: truncateUtf8(String(text), MAX_TEXT_BYTES),
-        ts: Date.now(),
-        room: session.room,
-      },
-      proof
-    )
-    let id: string
+    if (!activeRoom) ipcFailure('CHAT_DISCONNECTED', 'Chat not connected')
     try {
-      id = await sendEnvelope(bridge, session.overlayId, env, seed, session.cert, session.clockOffsetSec)
+      const item = await manager.request<RpcEvent>('room.sendMessage', { room: activeRoom, text: String(text) })
+      const mapped = timelineItem(item, identity?.identityKey)
+      if (mapped.kind !== 'message') ipcFailure('CHAT_PROTOCOL_INVALID', 'Messenger returned a non-message commit')
+      return { sent: true as const, item: mapped, identity: identity ?? undefined }
     } catch (error) {
-      ipcFailure('SEND_FAILED', 'Unable to send message', true, error)
-    }
-    let identityView: OwnChatIdentity | undefined
-    try {
-      identityView = await ownIdentityView(identity)
-    } catch (error) {
-      log.warn(`chat: sent message but identity refresh failed: ${toError(error).message}`)
-    }
-    return { sent: true as const, id, ts: env.ts, identity: identityView }
-  })
-
-  secureContractHandle(chatCreateRoomContract, async (displayArg) => {
-    if (!experimentalGatedRoomsEnabled()) {
-      ipcFailure('EXPERIMENTAL_FEATURE_DISABLED', 'Gated rooms require TONNET_EXPERIMENTAL_GATED_ROOMS=1')
-    }
-    let display: string
-    try {
-      display = normalizeRoom(displayArg)
-    } catch {
-      ipcFailure('INVALID_ROOM', 'Invalid room name')
-    }
-    if (display.includes('#')) ipcFailure('INVALID_ROOM', 'Room name must not contain "#"')
-    try {
-      parseRoomName(display)
-    } catch {
-      ipcFailure('INVALID_ROOM', 'Invalid room name')
-    }
-    try {
-      const full = await membership.createGatedRoom(display)
-      return { room: full }
-    } catch (error) {
-      ipcFailure('ROOM_CREATE_FAILED', 'Unable to create room', false, error)
+      publicFailure(error)
     }
   })
 
-  secureContractHandle(chatDmSendContract, async (peerKeyArg, text) => {
-    const bridge = tonBridgeProviders.messenger.getBridge()
-    const session = chatSessionController.session
-    if (!bridge || !session) ipcFailure('CHAT_DISCONNECTED', 'Chat not connected')
-    const peerKey = String(peerKeyArg ?? '').toLowerCase()
-    if (!/^[0-9a-f]{64}$/.test(peerKey)) ipcFailure('INVALID_RECIPIENT', 'Invalid recipient key')
-    const ownKey = await identity.devicePub()
-    if (peerKey === ownKey) ipcFailure('INVALID_RECIPIENT', 'Cannot send a direct message to yourself')
-    if (session.gated && !session.cert) {
-      return { sent: false, pendingMembership: true, identity: await ownIdentityView(identity) }
-    }
-    const attach = getSetting('messenger').attachWalletIdentity
-    const proof = attach ? await identity.ensureProof() : null
-    const domain = attach ? await identity.claimedDomain() : null
-    const seed = await identity.deviceSeed()
-    const plain = truncateUtf8(String(text), 1400)
-    const box = sealDM(seed, Buffer.from(peerKey, 'hex'), Buffer.from(plain, 'utf8'))
-    const env = buildSigned(
-      seed,
-      {
-        type: 'dm',
-        nick: wireNick(proof, domain),
-        text: box.toString('base64'),
-        ts: Date.now(),
-        room: session.room,
-        to: peerKey,
-      },
-      proof
-    )
+  secureContractHandle(chatDmSendContract, async (recipient, text) => {
+    if (!activeRoom) ipcFailure('CHAT_DISCONNECTED', 'Chat not connected')
     try {
-      await sendEnvelope(bridge, session.overlayId, env, seed, session.cert, session.clockOffsetSec)
+      const sent = await manager.request<Record<string, unknown>>('dm.send', {
+        room: activeRoom,
+        recipient,
+        text: String(text),
+      })
+      return { sent: true, id: String(sent.id ?? ''), ts: Number(sent.timestamp ?? 0), identity: identity ?? undefined }
     } catch (error) {
-      ipcFailure('SEND_FAILED', 'Unable to send direct message', true, error)
+      publicFailure(error)
     }
-    let identityView: OwnChatIdentity | undefined
+  })
+
+  secureContractHandle(chatMutateContract, async (mutation) => {
+    if (!activeRoom) ipcFailure('CHAT_DISCONNECTED', 'Chat not connected')
     try {
-      identityView = await ownIdentityView(identity)
+      let method = ''
+      let params: Record<string, unknown> = { room: activeRoom }
+      switch (mutation.action) {
+        case 'metadata':
+          method = 'room.setMetadata'
+          params = { ...params, name: mutation.name ?? '', description: mutation.description ?? '' }
+          break
+        case 'write-policy':
+          method = 'room.setWritePolicy'
+          params = { ...params, policy: mutation.anyoneCanWrite ? 'everyone' : 'admins' }
+          break
+        case 'pin':
+        case 'unpin':
+          method = `room.${mutation.action}`
+          params = { ...params, message_id: mutation.messageId }
+          break
+        case 'moderator-grant':
+        case 'moderator-revoke':
+          method = mutation.action === 'moderator-grant' ? 'room.grantModerator' : 'room.revokeModerator'
+          params = { ...params, identity_key: mutation.subjectKey }
+          break
+      }
+      if (!method) ipcFailure('INVALID_MUTATION', 'Invalid room mutation')
+      const item = await manager.request<RpcEvent>(method, params)
+      return { committed: true as const, item: timelineItem(item, identity?.identityKey) }
     } catch (error) {
-      log.warn(`chat: sent direct message but identity refresh failed: ${toError(error).message}`)
+      publicFailure(error)
     }
-    return { sent: true, id: String(env.sig ?? '').slice(0, 32), ts: env.ts, identity: identityView }
+  })
+
+  secureContractHandle(chatTimelineBeforeContract, async (beforeSeqno, limit = 100): Promise<ChatTimelinePage> => {
+    if (!activeRoom) ipcFailure('CHAT_DISCONNECTED', 'Chat not connected')
+    try {
+      const page = await manager.request<{ items: RpcEvent[]; has_more: boolean }>('room.getTimeline', {
+        room: activeRoom,
+        before_seqno: String(beforeSeqno),
+        limit,
+      })
+      return { items: page.items.map((item) => timelineItem(item, identity?.identityKey)), hasMore: page.has_more }
+    } catch (error) {
+      publicFailure(error)
+    }
   })
 
   secureContractHandle(chatIdentityContract, async () => {
     try {
-      return await ownIdentityView(identity)
+      return await getIdentity()
     } catch (error) {
-      ipcFailure('IDENTITY_FAILED', 'Unable to read chat identity', false, error)
+      publicFailure(error)
     }
   })
-
-  secureContractHandle(chatLinkIdentityContract, async () => {
-    try {
-      await identity.relink()
-      return await ownIdentityView(identity)
-    } catch (error) {
-      ipcFailure('IDENTITY_FAILED', 'Unable to link chat identity', false, error)
-    }
-  })
-
+  secureContractHandle(chatLinkIdentityContract, async () => getIdentity())
   secureContractHandle(chatClaimDomainContract, async (domain) => {
-    if (!isTonDomain(domain)) ipcFailure('INVALID_DOMAIN', 'Invalid .ton domain')
     try {
-      const res = await identity.claimDomain(domain)
-      return { ...res, identity: await ownIdentityView(identity) }
+      const value = await manager.request<RpcIdentity>('identity.confirmDomainLink', { domain })
+      identity = ownIdentity(value)
+      return { ok: true, identity }
     } catch (error) {
-      ipcFailure('DOMAIN_CLAIM_FAILED', 'Unable to claim domain', false, error)
+      return {
+        ok: false,
+        reason: error instanceof Error ? error.message : 'Domain verification failed',
+        identity: await getIdentity(),
+      }
     }
   })
-
   secureContractHandle(chatClearDomainContract, async () => {
-    try {
-      await identity.clearDomain()
-      return await ownIdentityView(identity)
-    } catch (error) {
-      ipcFailure('IDENTITY_FAILED', 'Unable to clear claimed domain', false, error)
-    }
+    const value = await manager.request<RpcIdentity>('identity.clearDomain')
+    identity = ownIdentity(value)
+    return identity
   })
-
-  secureContractHandle(chatDetectDomainsContract, async () => {
-    const own = await identity.ownIdentity()
-    if (!own.address) return { domains: [] }
-    if (!tonIndexerClient.isEnabled()) {
-      ipcFailure('DOMAIN_DETECTION_FAILED', 'Enable HTTP indexer fallback in Wallet settings to detect domains')
-    }
-    try {
-      return { domains: await ownedDomains(tonIndexerClient, own.address) }
-    } catch (err) {
-      log.warn(`chat: domain detection failed: ${toError(err).message}`)
-      ipcFailure('DOMAIN_DETECTION_FAILED', 'Unable to detect owned domains', true, err)
-    }
-  })
-
+  secureContractHandle(chatDetectDomainsContract, async () => ({ domains: [] }))
   secureContractHandle(chatResetIdentityContract, async () => {
-    const currentSession = chatSessionController.session
-    const active = currentSession ? { room: currentSession.room, bootstrap: currentSession.bootstrap } : null
-    const generation = ++connectionGeneration
-    if (active) emitContractToRenderer(chatConnectionContract, { room: active.room, status: 'reconnecting' })
-    try {
-      await chatSessionController.disconnect()
-      await identity.resetIdentity()
-      await membership.clear()
-      const nextIdentity = await ownIdentityView(identity)
-      if (active && generation === connectionGeneration) {
-        try {
-          await chatSessionController.connect(active.room, ({ markJoining }) =>
-            establish(active.room, active.bootstrap, markJoining)
-          )
-          if (generation === connectionGeneration) {
-            emitContractToRenderer(chatConnectionContract, { room: active.room, status: 'connected' })
-          }
-        } catch (error) {
-          log.event('warn', 'chat.identity_reset.reconnect_failed', 'chat reconnect after identity reset failed', {
-            error: toError(error),
-          })
-          if (generation === connectionGeneration) {
-            emitContractToRenderer(chatConnectionContract, { room: active.room, status: 'error' })
-          }
-        }
-      }
-      return nextIdentity
-    } catch (error) {
-      if (active && generation === connectionGeneration) {
-        emitContractToRenderer(chatConnectionContract, { room: active.room, status: 'error' })
-      }
-      ipcFailure('IDENTITY_FAILED', 'Unable to reset chat identity', false, error)
-    }
+    const current = identity ?? (await getIdentity())
+    const value = await manager.request<RpcIdentity>('identity.reset', { expected_key: current.identityKey })
+    identity = ownIdentity(value)
+    return identity
   })
-
   secureContractHandle(chatDisconnectContract, async () => {
-    try {
-      connectionGeneration++
-      await chatSessionController.disconnect()
-      return { disconnected: true as const }
-    } catch (error) {
-      ipcFailure('DISCONNECT_FAILED', 'Unable to disconnect chat', true, error)
-    }
+    if (activeRoom) await manager.request('room.leave', { reference: activeRoom })
+    activeRoom = null
+    return { disconnected: true as const }
   })
 }

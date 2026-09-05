@@ -169,7 +169,7 @@ describe('Settings Persistence', () => {
     it('does not overwrite settings written by a future application version', async () => {
       vi.resetModules()
       const { loadSettings: freshLoad, getDefaultSettings: getDefaults } = await import('../index')
-      const future = JSON.stringify({ schemaVersion: 4, general: { homepage: 'ton://future' } })
+      const future = JSON.stringify({ schemaVersion: 5, general: { homepage: 'ton://future' } })
       vi.mocked(existsSync).mockReturnValue(true)
       vi.mocked(readFileSync).mockReturnValue(future)
 
@@ -773,6 +773,26 @@ describe('Settings Persistence', () => {
       })
       const current = { appearance: { defaultZoom: 100 } }
       expect(migratePageZoom(current)).toEqual({ migrated: false, data: current })
+    })
+  })
+
+  describe('migrateMessengerAutostart()', () => {
+    it('preserves the former Messenger opt-in', async () => {
+      const { migrateMessengerAutostart } = await import('../index')
+
+      expect(migrateMessengerAutostart({ messenger: { networkEnabled: true } })).toEqual({
+        migrated: true,
+        data: { messenger: { autostart: true } },
+      })
+    })
+
+    it('keeps an explicit autostart value and removes the legacy field', async () => {
+      const { migrateMessengerAutostart } = await import('../index')
+
+      expect(migrateMessengerAutostart({ messenger: { networkEnabled: true, autostart: false } })).toEqual({
+        migrated: true,
+        data: { messenger: { autostart: false } },
+      })
     })
   })
 

@@ -21,8 +21,7 @@ function getBridgeConfigPath(): string {
 }
 
 export function registerBridgeHandlers(registry: ServiceRegistry): void {
-  const { bridgeInterceptor, bridgePermissionStore, proxyManager, chatSessionController, tonBridgeCoordinator } =
-    registry
+  const { bridgeInterceptor, bridgePermissionStore, proxyManager, tonBridgeCoordinator } = registry
 
   tonsiteContractHandle(
     bridgeSendContract,
@@ -122,11 +121,9 @@ export function registerBridgeHandlers(registry: ServiceRegistry): void {
   // Bridge restart (bridge process only; proxy stays up)
   secureContractHandle(bridgeRestartContract, async () => {
     try {
-      await chatSessionController.runDisconnected(async () => {
-        await proxyManager.restartBridge()
-        const { wsPort } = proxyManager.getStatus()
-        await tonBridgeCoordinator.waitUntilReady(wsPort)
-      })
+      await proxyManager.restartBridge()
+      const { wsPort } = proxyManager.getStatus()
+      await tonBridgeCoordinator.waitUntilReady(wsPort)
       return { success: true }
     } catch (err) {
       ipcFailure('BRIDGE_RESTART_FAILED', 'Unable to restart bridge', true, err)

@@ -1,12 +1,10 @@
 import { memo, useCallback, useEffect, useState } from 'react'
-import { Copy, Check, ChevronLeft, ChevronRight, LoaderCircle, RadioTower } from 'lucide-react'
-import { Toggle } from '@/features/settings/components/shared/Toggle'
+import { Check, Copy, LoaderCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { createLogger } from '@/logger'
 import { useConfirmAction } from '@/hooks/useConfirmAction'
-import type { OwnChatIdentity, MessengerSettings } from '@shared/types'
+import type { OwnChatIdentity } from '@shared/types'
 import { avatarColor, initial } from '@/features/messenger/components/chat/util'
-import vkdogSrc from '@/assets/vkdog.png'
 import '@/features/settings/components/settings.css'
 import { messengerClient } from '@/features/messenger/client'
 import { AppIcon } from '@/components/ui/AppIcon'
@@ -19,351 +17,157 @@ interface MessengerSectionProps {
 
 export const MessengerSection = memo(function MessengerSection({ onIdentityChange }: MessengerSectionProps) {
   const [identity, setIdentity] = useState<OwnChatIdentity | null>(null)
-  const [attach, setAttach] = useState(false)
-  const [networkEnabled, setNetworkEnabled] = useState(false)
   const [loading, setLoading] = useState(true)
   const [copied, setCopied] = useState(false)
-  const [linking, setLinking] = useState(false)
-  const [networking, setNetworking] = useState(false)
-  const [domains, setDomains] = useState<string[]>([])
-  const [detected, setDetected] = useState(false)
-  const [detecting, setDetecting] = useState(false)
+  const [domainInput, setDomainInput] = useState('')
+  const [domainBusy, setDomainBusy] = useState(false)
   const [domainError, setDomainError] = useState<string | null>(null)
-  const [tonView, setTonView] = useState(false)
   const resetConfirm = useConfirmAction()
 
   const applyIdentity = useCallback(
-    (id: OwnChatIdentity | null) => {
-      setIdentity(id)
-      onIdentityChange?.(id)
+    (value: OwnChatIdentity | null) => {
+      setIdentity(value)
+      onIdentityChange?.(value)
     },
     [onIdentityChange]
   )
 
   useEffect(() => {
     let active = true
-    const load = async () => {
-      try {
-        const [id, prefs] = await Promise.all([messengerClient.getIdentity(), messengerClient.getSettings()])
+    void messengerClient
+      .getIdentity()
+      .then((id) => {
         if (!active) return
-        setIdentity(id)
-        setAttach(Boolean((prefs as MessengerSettings)?.attachWalletIdentity))
-        setNetworkEnabled(Boolean((prefs as MessengerSettings)?.networkEnabled))
-      } catch (err) {
-        log.error('Failed to load messenger settings:', err)
-      } finally {
-        if (active) setLoading(false)
-      }
-    }
-    load()
+        applyIdentity(id)
+      })
+      .catch((error) => log.error('Failed to load messenger identity:', error))
+      .finally(() => active && setLoading(false))
     return () => {
       active = false
     }
-  }, [])
+  }, [applyIdentity])
 
-  const copyDeviceKey = useCallback(() => {
+  const copyIdentity = useCallback(() => {
     if (!identity) return
-    navigator.clipboard
-      .writeText(identity.deviceKey)
-      .then(() => {
-        setCopied(true)
-        setTimeout(() => setCopied(false), 1500)
-      })
-      .catch(() => {})
+    void navigator.clipboard.writeText(identity.identityKey).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    })
   }, [identity])
 
-  const toggleAttach = useCallback(
-    async (v: boolean) => {
-      setAttach(v)
-      setLinking(true)
-      try {
-        await messengerClient.updateSettings({ attachWalletIdentity: v })
-        applyIdentity(v ? await messengerClient.linkIdentity() : await messengerClient.getIdentity())
-      } catch (err) {
-        log.error('Failed to update wallet link:', err)
-      } finally {
-        setLinking(false)
-      }
-    },
-    [applyIdentity]
-  )
-
-  const toggleNetwork = useCallback(
-    async (v: boolean) => {
-      const previous = networkEnabled
-      setNetworkEnabled(v)
-      setNetworking(true)
-      try {
-        const res = await messengerClient.updateSettings({ networkEnabled: v })
-        if (!res.success) throw new Error('Failed to update messenger networking')
-      } catch (err) {
-        setNetworkEnabled(previous)
-        log.error('Failed to update messenger networking:', err)
-      } finally {
-        setNetworking(false)
-      }
-    },
-    [networkEnabled]
-  )
-
-  const detect = useCallback(async () => {
-    setDetecting(true)
+  const confirmDomain = useCallback(async () => {
+    const domain = domainInput.trim().toLowerCase()
+    if (!domain) return
+    setDomainBusy(true)
     setDomainError(null)
     try {
-      const res = await messengerClient.detectDomains()
-      setDomains(res.domains)
-      setDetected(true)
-    } catch (err) {
-      log.error('Failed to detect domains:', err)
+      const result = await messengerClient.claimDomain(domain)
+      if (!result.ok) throw new Error(result.reason ?? 'The msg_id record does not match this identity')
+      applyIdentity(result.identity)
+      setDomainInput('')
+    } catch (error) {
+      setDomainError(error instanceof Error ? error.message : 'Unable to verify domain')
     } finally {
-      setDetecting(false)
+      setDomainBusy(false)
     }
-  }, [])
+  }, [applyIdentity, domainInput])
 
-  const claim = useCallback(
-    async (domain: string) => {
-      setDomainError(null)
-      try {
-        const res = await messengerClient.claimDomain(domain)
-        applyIdentity(res.identity)
-        if (res.ok) {
-          setDomains([])
-          setDetected(false)
-        } else {
-          setDomainError(res.reason ?? 'Could not verify domain ownership')
-        }
-      } catch (err) {
-        log.error('Failed to claim domain:', err)
-      }
-    },
-    [applyIdentity]
-  )
-
-  const removeDomain = useCallback(async () => {
+  const clearDomain = useCallback(async () => {
     try {
       applyIdentity(await messengerClient.clearDomain())
-    } catch (err) {
-      log.error('Failed to clear domain:', err)
+    } catch (error) {
+      log.error('Failed to clear identity domain:', error)
     }
   }, [applyIdentity])
 
-  const handleReset = useCallback(async () => {
+  const resetIdentity = useCallback(async () => {
     if (!resetConfirm.trigger()) return
     try {
-      await messengerClient.updateSettings({ attachWalletIdentity: false })
-      const id = await messengerClient.resetIdentity()
-      setAttach(false)
-      applyIdentity(id)
-      setDomains([])
-      setDetected(false)
-      setDomainError(null)
-    } catch (err) {
-      log.error('Failed to reset chat identity:', err)
+      applyIdentity(await messengerClient.resetIdentity())
+    } catch (error) {
+      log.error('Failed to reset messenger identity:', error)
     }
-  }, [resetConfirm, applyIdentity])
-
-  useEffect(() => {
-    if (!attach || !identity?.linked || detected) return
-    void detect()
-  }, [attach, identity?.linked, detected, detect])
+  }, [applyIdentity, resetConfirm])
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-12">
-        <LoaderCircle className="h-6 w-6 animate-spin text-muted-foreground" aria-hidden="true" />
+      <div className="flex justify-center py-12">
+        <LoaderCircle className="h-6 w-6 animate-spin text-muted-foreground" />
       </div>
     )
   }
 
-  const walletReady = Boolean(identity?.walletReady)
-  const linked = Boolean(attach && identity?.linked)
-  const displayName = linked
-    ? (identity?.domain ?? identity?.addressShort ?? '...')
-    : identity
-      ? `#${identity.deviceKey.slice(0, 10)}`
-      : '...'
-  const avatarSeed = identity?.domain ?? (linked ? identity?.addressShort : identity?.deviceKey) ?? '?'
-  const walletSub = !walletReady
-    ? 'No wallet'
-    : linked && identity?.addressShort
-      ? identity.addressShort
-      : attach
-        ? 'Linking...'
-        : 'Anonymous'
-  const tonSub = identity?.domain ? identity.domain : linked ? 'Not set' : 'Needs a linked wallet'
-  const domainOptions = identity?.domain && !domains.includes(identity.domain) ? [...domains, identity.domain] : domains
-
-  if (tonView) {
-    return (
-      <div className="msg-view-enter px-1">
-        <div className="flex items-center gap-1.5 py-2">
-          <button
-            type="button"
-            onClick={() => setTonView(false)}
-            aria-label="Back"
-            className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-surface-hover hover:text-foreground"
-          >
-            <ChevronLeft className="h-5 w-5" aria-hidden="true" />
-          </button>
-          <span className="text-[15px] font-medium text-foreground">Link a .ton</span>
-        </div>
-
-        <div className="settings-group overflow-hidden">
-          <button
-            type="button"
-            onClick={() => {
-              void removeDomain()
-              setTonView(false)
-            }}
-            className="flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-surface-hover"
-          >
-            <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground">
-              <AppIcon name="wallet" className="h-[18px] w-[18px] text-identity-foreground" />
-            </span>
-            <div className="min-w-0 flex-1">
-              <div className="text-[14px] font-medium text-foreground">Wallet address</div>
-              <div className="truncate font-mono text-[11px] text-muted-foreground">{identity?.addressShort ?? ''}</div>
-            </div>
-            {!identity?.domain && <Check className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />}
-          </button>
-
-          {domainOptions.map((d) => (
-            <button
-              key={d}
-              type="button"
-              onClick={() => {
-                void claim(d)
-                setTonView(false)
-              }}
-              className="flex w-full items-center gap-3 border-t border-border-subtle px-3 py-2.5 text-left transition-colors hover:bg-surface-hover"
-            >
-              <span
-                className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-[14px] font-semibold text-identity-foreground"
-                style={{ backgroundColor: avatarColor(d) }}
-              >
-                {initial(d)}
-              </span>
-              <span className="min-w-0 flex-1 truncate text-[14px] lowercase text-foreground">{d}</span>
-              {identity?.domain === d && <Check className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />}
-            </button>
-          ))}
-        </div>
-
-        {detecting && (
-          <div className="flex items-center gap-2 px-3 py-3 text-[12px] text-muted-foreground">
-            <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> Scanning your wallet...
-          </div>
-        )}
-        {!detecting && domainOptions.length === 0 && (
-          <p className="px-3 py-3 text-[12px] text-muted-foreground">No .ton names in this wallet.</p>
-        )}
-        {domainError && <p className="px-3 pt-1 text-[11px] text-destructive">{domainError}</p>}
-      </div>
-    )
-  }
+  const label = identity?.domain || identity?.name || (identity ? `#${identity.identityKey.slice(0, 10)}` : '...')
+  const seed = identity?.domain || identity?.identityKey || '?'
 
   return (
     <div className="px-1">
       <div className="flex flex-col items-center gap-2.5 py-3">
-        {linked ? (
-          <img src={vkdogSrc} alt="" className="h-16 w-16 rounded-full object-cover" />
-        ) : (
-          <span
-            className="grid h-16 w-16 place-items-center rounded-full text-identity-foreground"
-            style={{ backgroundColor: avatarColor(avatarSeed) }}
-          >
-            <AppIcon name="anonAvatar" className="h-9 w-9" />
-          </span>
-        )}
-        <div
-          className={`max-w-full truncate text-[15px] font-medium text-foreground ${identity?.domain ? 'lowercase' : 'font-mono'}`}
+        <span
+          className="grid h-16 w-16 place-items-center rounded-full text-[22px] font-semibold text-identity-foreground"
+          style={{ backgroundColor: avatarColor(seed) }}
         >
-          {displayName}
+          {initial(label)}
+        </span>
+        <div
+          className={
+            identity?.domain
+              ? 'text-[15px] font-medium lowercase text-foreground'
+              : 'font-mono text-[15px] text-foreground'
+          }
+        >
+          {label}
         </div>
       </div>
 
       <div className="settings-group">
-        <div className="flex items-center gap-3 rounded-t-[13px] px-3 py-2.5">
-          <span className="grid h-[29px] w-[29px] shrink-0 place-items-center rounded-control bg-secondary text-secondary-foreground">
+        <button type="button" onClick={copyIdentity} className="flex w-full items-center gap-3 px-3 py-2.5 text-left">
+          <span className="grid h-[29px] w-[29px] place-items-center rounded-control bg-secondary text-secondary-foreground">
             <AppIcon name="messengerDevice" className="h-[17px] w-[17px] text-identity-foreground" />
           </span>
           <div className="min-w-0 flex-1">
-            <div className="text-[14px] font-medium text-foreground">Device key</div>
-            <div className="truncate font-mono text-[11px] text-muted-foreground">
-              {identity ? `#${identity.deviceKey.slice(0, 16)}` : '...'}
-            </div>
+            <div className="text-[14px] font-medium text-foreground">Identity key</div>
+            <div className="truncate font-mono text-[11px] text-muted-foreground">{identity?.identityKey}</div>
           </div>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7 shrink-0 text-muted-foreground"
-            onClick={copyDeviceKey}
-            disabled={!identity}
-            aria-label="Copy device key"
-          >
-            {copied ? (
-              <Check className="h-4 w-4" aria-hidden="true" />
-            ) : (
-              <Copy className="h-4 w-4" aria-hidden="true" />
-            )}
-          </Button>
-        </div>
-
-        <div className="flex items-center gap-3 border-t border-border-subtle px-3 py-2.5">
-          <span className="grid h-[29px] w-[29px] shrink-0 place-items-center rounded-control bg-success text-success-foreground">
-            <RadioTower className="h-[17px] w-[17px] text-identity-foreground" aria-hidden="true" />
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className="text-[14px] font-medium text-foreground">Messenger network</div>
-            <div className="truncate text-[11px] text-muted-foreground">
-              {networkEnabled ? 'ADNL, Overlay, DHT enabled' : 'Off until enabled'}
-            </div>
-          </div>
-          <Toggle
-            checked={networkEnabled}
-            onChange={toggleNetwork}
-            ariaLabel="Messenger network"
-            disabled={networking}
-          />
-        </div>
-
-        <div className="flex items-center gap-3 border-t border-border-subtle px-3 py-2.5">
-          <span className="grid h-[29px] w-[29px] shrink-0 place-items-center rounded-control bg-primary text-primary-foreground">
-            <AppIcon name="wallet" className="h-[17px] w-[17px] text-identity-foreground" />
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className="text-[14px] font-medium text-foreground">Link wallet</div>
-            <div className="truncate text-[11px] text-muted-foreground">{walletSub}</div>
-          </div>
-          <Toggle checked={attach} onChange={toggleAttach} ariaLabel="Link wallet" disabled={!walletReady || linking} />
-        </div>
-
-        <button
-          type="button"
-          onClick={() => setTonView(true)}
-          disabled={!linked}
-          className="flex w-full items-center gap-3 border-t border-border-subtle px-3 py-2.5 text-left transition-colors enabled:hover:bg-surface-hover disabled:opacity-60"
-        >
-          <span className="grid h-[29px] w-[29px] shrink-0 place-items-center rounded-control bg-primary text-primary-foreground">
-            <AppIcon name="ton" className="h-[17px] w-[17px] text-identity-foreground" />
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className="text-[14px] font-medium text-foreground">Link a .ton</div>
-            <div className="truncate text-[11px] text-muted-foreground">{tonSub}</div>
-          </div>
-          {linked && <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
+          {copied ? <Check className="h-4 w-4 text-primary" /> : <Copy className="h-4 w-4 text-muted-foreground" />}
         </button>
-
-        <div className="flex items-center gap-3 rounded-b-[13px] border-t border-border-subtle px-3 py-2.5">
-          <span className="grid h-[29px] w-[29px] shrink-0 place-items-center rounded-control bg-destructive text-destructive-foreground">
-            <AppIcon name="messengerReset" className="h-[17px] w-[17px] text-identity-foreground" />
-          </span>
-          <span className="flex-1 text-[14px] font-medium text-foreground">Reset identity</span>
-          <Button variant="destructive" size="sm" onClick={handleReset}>
-            {resetConfirm.isArmed() ? 'Confirm' : 'Reset'}
-          </Button>
-        </div>
       </div>
+
+      <div className="mt-3 settings-group p-3">
+        <div className="mb-2 text-[13px] font-medium text-foreground">TON DNS identity</div>
+        {identity?.domain ? (
+          <div className="flex items-center gap-2">
+            <span className="min-w-0 flex-1 truncate text-sm lowercase text-foreground">{identity.domain}</span>
+            <Button variant="ghost" size="sm" onClick={() => void clearDomain()}>
+              Remove
+            </Button>
+          </div>
+        ) : (
+          <div className="flex gap-2">
+            <input
+              value={domainInput}
+              onChange={(event) => setDomainInput(event.target.value)}
+              placeholder="alice.ton"
+              className="min-w-0 flex-1 rounded-lg border border-border-subtle bg-surface px-3 py-2 text-sm text-foreground"
+            />
+            <Button size="sm" disabled={domainBusy || !domainInput.trim()} onClick={() => void confirmDomain()}>
+              {domainBusy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : 'Verify'}
+            </Button>
+          </div>
+        )}
+        <p className="mt-2 text-[11px] text-muted-foreground">
+          The domain must contain msg_id={identity?.identityKey ?? 'your identity key'}.
+        </p>
+        {domainError && <p className="mt-1 text-[11px] text-destructive">{domainError}</p>}
+      </div>
+
+      <Button
+        variant={resetConfirm.isArmed() ? 'destructive' : 'ghost'}
+        className="mt-3 w-full"
+        onClick={() => void resetIdentity()}
+      >
+        {resetConfirm.isArmed() ? 'Confirm new identity' : 'Reset identity'}
+      </Button>
     </div>
   )
 })

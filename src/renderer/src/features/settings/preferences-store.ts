@@ -65,7 +65,7 @@ export interface AppPreferences {
   // Cocoon AI
   cocoonAutostart: boolean
 
-  messengerNetworkEnabled: boolean
+  messengerAutostart: boolean
 }
 
 interface PreferencesState {
@@ -136,7 +136,7 @@ export const defaultPreferences: AppPreferences = {
   // Cocoon AI
   cocoonAutostart: DEFAULT_SETTINGS.cocoon.autostart,
 
-  messengerNetworkEnabled: DEFAULT_SETTINGS.messenger.networkEnabled,
+  messengerAutostart: DEFAULT_SETTINGS.messenger.autostart,
 }
 
 // Map flat preferences to categorized main process structure
@@ -183,7 +183,7 @@ const prefToCategory: Record<keyof AppPreferences, PreferenceMapping> = {
   displayUnicodeDomains: { category: 'advanced', field: 'displayUnicodeDomains' },
   tonConnectEnabled: { category: 'advanced', field: 'tonConnectEnabled' },
   cocoonAutostart: { category: 'cocoon', field: 'autostart' },
-  messengerNetworkEnabled: { category: 'messenger', field: 'networkEnabled' },
+  messengerAutostart: { category: 'messenger', field: 'autostart' },
 }
 
 // Convert main process settings to flat preferences. Derived from the single

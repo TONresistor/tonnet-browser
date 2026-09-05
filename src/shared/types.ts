@@ -82,21 +82,15 @@ export type PaymentNotificationData = import('./ipc-contract/wallet').PaymentNot
 export type DnsResolveResult = import('./ipc-contract/wallet').DnsResolveResult
 
 export interface ChatIdentityInfo {
-  tier: 'domain' | 'wallet' | 'device'
+  tier: 'domain' | 'identity'
   name: string
-  address?: string
-  addressShort?: string
   domain?: string
   fingerprint?: string
 }
 
 export interface OwnChatIdentity {
-  deviceKey: string
-  linked: boolean
-  declined: boolean
-  walletReady: boolean
-  address?: string
-  addressShort?: string
+  identityKey: string
+  name: string
   domain?: string
 }
 

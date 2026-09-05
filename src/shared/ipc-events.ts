@@ -51,18 +51,7 @@ export interface IpcEventMap {
   'wallet:payment-made': [notification: PaymentNotificationData]
   'wallet:payment-failed': [notification: PaymentNotificationData]
   'overlay:action': [overlayId: string, actionType: string, actionData: unknown]
-  'chat:message': [
-    msg: {
-      room?: string
-      id: string
-      nick: string
-      text: string
-      ts: number
-      self?: boolean
-      deviceKey?: string
-      identity: import('./types').ChatIdentityInfo
-    },
-  ]
+  'chat:timeline': [item: import('./ipc-contract/chat').ChatTimelineItem]
   'chat:dm': [
     msg: {
       room?: string
@@ -73,13 +62,9 @@ export interface IpcEventMap {
       identity: import('./types').ChatIdentityInfo
     },
   ]
-  'chat:connection': [
-    event: {
-      room: string
-      status: 'reconnecting' | 'connected' | 'error'
-      attempt?: number
-    },
-  ]
+  'chat:connection': [event: import('./ipc-contract/chat').ChatConnectionEvent]
+  'chat:room-state': [state: import('./ipc-contract/chat').ChatRoomState]
+  'chat:room-presence': [presence: import('./ipc-contract/chat').ChatRoomPresence]
   'cocoon:state-changed': [state: CocoonState]
   'cocoon:log': [event: CocoonLogEvent]
   'cocoon:withdraw:event': [event: WithdrawDriverEvent]

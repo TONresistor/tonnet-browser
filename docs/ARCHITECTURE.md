@@ -16,7 +16,7 @@ src/
 |   |-- windows/                  Windows, tabs, sessions, and WebContents
 |   |-- wallet/                   Wallet state, signing, and transfers
 |   |-- cocoon/                   Cocoon setup and lifecycle
-|   |-- chat/                     Messenger sessions and messages
+|   |-- messenger/                Standalone Messenger client supervision and JSON-RPC
 |   |-- tonconnect/               TON Connect sessions and approvals
 |   |-- indexer/                  TON HTTP indexer client
 |   `-- settings/                 Settings storage and updates

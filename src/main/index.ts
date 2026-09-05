@@ -456,6 +456,9 @@ app.whenReady().then(async () => {
   })
 
   safeStartup('Wallet init', () => services.walletManager.init())
+  if (getSetting('messenger').autostart) {
+    safeStartup('Messenger client start', () => services.messengerClientManager.start())
+  }
   safeStartup('Payment policy init', () => services.paymentPolicyStore.init())
   safeStartup('Bridge interceptor init', async () => {
     await services.tonBridgeCoordinator.whenReady()

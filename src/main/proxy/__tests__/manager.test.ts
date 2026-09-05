@@ -39,9 +39,6 @@ const mockSettings = {
     proxyVerbosity: 2,
     syncTestDomain: 'test.ton',
   },
-  messenger: {
-    networkEnabled: false,
-  },
 }
 
 function getAppSettings() {
@@ -49,7 +46,6 @@ function getAppSettings() {
     general: mockSettings.general,
     network: { ...mockSettings.network, storagePort: 5555 },
     advanced: { proxyVerbosity: mockSettings.advanced.proxyVerbosity },
-    messenger: mockSettings.messenger,
   })
 }
 
@@ -834,34 +830,18 @@ describe('ProxyManager', () => {
       expect(manager.getStatus()).toMatchObject({ status: 'connected', port: 9090, wsPort: 8081 })
     })
 
-    it('restores the previous bridge after a messenger-only restart fails', async () => {
-      const restoredBridgeProcess = readyBridgeProcess(createMockProcess())
-      vi.mocked(spawn)
-        .mockReset()
-        .mockReturnValueOnce(mockProxyProcess as any)
-        .mockReturnValueOnce(mockBridgeProcess as any)
-        .mockReturnValueOnce(restoredBridgeProcess as any)
-
+    it('does not restart the bridge for a Messenger startup preference change', async () => {
       emitProxyReady()
       await manager.start()
       const previous = getAppSettings()
       const candidate = {
         ...previous,
-        messenger: { ...previous.messenger, networkEnabled: true },
+        messenger: { ...previous.messenger, autostart: true },
       }
-      vi.mocked(applyBridgeDefaults).mockRejectedValueOnce(new Error('bridge config unavailable'))
 
-      await expect(manager.applySettingsChange(candidate)).rejects.toThrow('bridge config unavailable')
-      expect(manager.getStatus()).toMatchObject({ status: 'syncing', port: 8080, wsPort: 8081 })
-      expect(mockProxyProcess.kill).not.toHaveBeenCalled()
-      expect(mockSettings.messenger.networkEnabled).toBe(false)
-
-      await manager.applySettingsChange(previous)
-
-      expect(spawn).toHaveBeenCalledTimes(3)
-      expect(applyBridgeDefaults).toHaveBeenLastCalledWith(expect.stringContaining('bridge'), {
-        enableChatNamespaces: false,
-      })
+      await expect(manager.applySettingsChange(candidate)).resolves.toEqual({ bridgeRestarted: false })
+      expect(spawn).toHaveBeenCalledTimes(2)
+      expect(applyBridgeDefaults).toHaveBeenCalledTimes(1)
       expect(manager.getStatus()).toMatchObject({ status: 'connected', port: 8080, wsPort: 8081 })
     })
   })

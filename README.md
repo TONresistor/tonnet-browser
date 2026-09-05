@@ -33,7 +33,7 @@
 
 Tonnet Browser is a native desktop browser for the TON Network. It resolves `.ton`, `.t.me`, `.adnl`, `.eth` (ENS), and `.sol` (SNS) through decentralized DNS and delivers content over RLDP directly from the network.
 
-All traffic goes through ADNL, either peer-to-peer or via multi-hop tunnels. A WebSocket bridge connects directly to the TON blockchain, removing any dependency on centralized APIs like TonCenter or TonAPI. Anti-fingerprinting, per-domain isolation, built-in TON Storage, and optional experimental Messenger are included. No telemetry, no tracking, fully open source.
+TON Site traffic goes through ADNL, either peer-to-peer or via multi-hop tunnels. A WebSocket bridge provides TON blockchain access. Experimental Messenger uses its own authenticated TON QUIC client and DHT discovery, independently of the proxy and its tunnel settings. Anti-fingerprinting, per-domain isolation and built-in TON Storage are included. No telemetry, no tracking, fully open source.
 
 ## Features
 
@@ -47,7 +47,7 @@ All traffic goes through ADNL, either peer-to-peer or via multi-hop tunnels. A W
   <tr>
     <td align="center" width="200"><br><b>Bridge</b><br><br><sub>WebSocket JSON-RPC<br>Direct to TON<br>No centralized API dependency</sub><br><br></td>
     <td align="center" width="200"><br><b>Security</b><br><br><sub>Process sandboxing<br>SSRF protection<br>IPC hardening<br>Encrypted history</sub><br><br></td>
-    <td align="center" width="200"><br><b>Messenger</b><br><br><sub>Experimental groupchat<br>DHT room discovery<br>Opt-in network</sub><br><br></td>
+    <td align="center" width="200"><br><b>Messenger</b><br><br><sub>Persistent public rooms<br>TON QUIC and DHT<br>Independent client</sub><br><br></td>
     <td align="center" width="200"><br><b>Fingerprint</b><br><br><sub>Canvas, WebGL, Audio<br>WebRTC leak blocking<br>Generic User-Agent</sub><br><br></td>
   </tr>
 </table>

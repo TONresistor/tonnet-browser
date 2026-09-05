@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo, memo } from 'react'
-import type { MessengerSettings, OwnChatIdentity } from '@shared/types'
+import type { OwnChatIdentity } from '@shared/types'
+import type { ChatRoomPresence, ChatRoomState } from '@shared/ipc-contract/chat'
 import ChatSidebar from './chat/ChatSidebar'
 import ChatRoomView from './chat/ChatRoomView'
 import DmView from './chat/DmView'
@@ -7,25 +8,34 @@ import { AddRoomModal } from './chat/AddRoomModal'
 import { useFollowedRooms, type FollowedRoom } from './chat/useFollowedRooms'
 import { useRoomPreviews } from './chat/useRoomPreviews'
 import { useDmConversations } from './chat/useDmConversations'
-import { appendUniqueBounded, type ChatMsg, type ChatStatus } from './chat/util'
+import {
+  formatTimelineItem,
+  mergeTimelineItems,
+  timelineIdentityLabels,
+  type ChatStatus,
+  type ChatTimelineItem,
+  type ChatTimelineMessage,
+} from './chat/util'
 import { messengerClient } from '@/features/messenger/client'
 
 function ChatPage(): React.JSX.Element {
-  const { rooms, add, remove } = useFollowedRooms()
+  const { rooms, add, remove, canonicalize, updateName } = useFollowedRooms()
   const { previews, update: updatePreview } = useRoomPreviews()
   const { conversations, receive: receiveDm, appendSelf, open: openDm, remove: removeDm } = useDmConversations()
 
   const [room, setRoom] = useState<string>('')
   const [node, setNode] = useState<string>('')
 
-  const [messages, setMessages] = useState<ChatMsg[]>([])
+  const [timeline, setTimeline] = useState<ChatTimelineItem[]>([])
+  const [hasOlder, setHasOlder] = useState(true)
+  const [loadingOlder, setLoadingOlder] = useState(false)
   const [input, setInput] = useState('')
   const [status, setStatus] = useState<ChatStatus>('idle')
   const [error, setError] = useState<string | null>(null)
   const [addOpen, setAddOpen] = useState(false)
   const [identity, setIdentity] = useState<OwnChatIdentity | null>(null)
-  const [networkEnabled, setNetworkEnabled] = useState(false)
-  const [enablingNetwork, setEnablingNetwork] = useState(false)
+  const [roomState, setRoomState] = useState<ChatRoomState | null>(null)
+  const [presence, setPresence] = useState<ChatRoomPresence | null>(null)
 
   const [activeDm, setActiveDm] = useState<string>('')
   const [dmInput, setDmInput] = useState('')
@@ -44,47 +54,21 @@ function ChatPage(): React.JSX.Element {
       .catch(() => {})
   }, [])
 
-  const refreshMessengerSettings = useCallback(() => {
-    messengerClient
-      .getSettings()
-      .then((prefs) => setNetworkEnabled(Boolean((prefs as MessengerSettings)?.networkEnabled)))
-      .catch(() => {})
-  }, [])
-
   useEffect(() => {
     refreshIdentity()
-    refreshMessengerSettings()
-  }, [refreshIdentity, refreshMessengerSettings])
-
-  useEffect(() => {
-    const off = messengerClient.onSettingsChanged((change) => {
-      if (change.reset) {
-        refreshMessengerSettings()
-        return
-      }
-      if (change.category !== 'messenger') return
-      const next = (change.values as Partial<MessengerSettings> | undefined)?.networkEnabled
-      if (typeof next === 'boolean') setNetworkEnabled(next)
-    })
-    return () => off()
-  }, [refreshMessengerSettings])
+  }, [refreshIdentity])
 
   useEffect(() => {
     let cancelled = false
-    const key = `${room} ${node} ${networkEnabled ? 'enabled' : 'disabled'}`
+    const key = `${room} ${node}`
     connectedKeyRef.current = key
-    setMessages([])
+    setTimeline([])
+    setHasOlder(true)
+    setRoomState(null)
+    setPresence(null)
     setError(null)
     if (!room) {
       setStatus('idle')
-      messengerClient.disconnect().catch(() => {})
-      return () => {
-        cancelled = true
-      }
-    }
-    if (!networkEnabled) {
-      setStatus('idle')
-      setError('Messenger networking is disabled. Enable it to join rooms.')
       messengerClient.disconnect().catch(() => {})
       return () => {
         cancelled = true
@@ -94,7 +78,19 @@ function ChatPage(): React.JSX.Element {
     messengerClient
       .connect(room, node || undefined)
       .then((res) => {
-        if (!cancelled && connectedKeyRef.current === key && res.room === roomRef.current) setStatus('connected')
+        if (!cancelled && connectedKeyRef.current === key) {
+          setRoomState(res.state)
+          setPresence(res.presence)
+          setTimeline(res.timeline.items)
+          setHasOlder(res.timeline.hasMore)
+          if (res.room !== roomRef.current) {
+            canonicalize(roomRef.current, res.room, res.state.name)
+            setRoom(res.room)
+          } else {
+            updateName(res.room, res.state.name)
+          }
+          setStatus('connected')
+        }
       })
       .catch((e: unknown) => {
         if (!cancelled && connectedKeyRef.current === key) {
@@ -109,27 +105,22 @@ function ChatPage(): React.JSX.Element {
         messengerClient.disconnect().catch(() => {})
       }
     }
-  }, [room, node, networkEnabled])
+  }, [room, node, canonicalize, updateName])
 
   useEffect(() => {
-    const off = messengerClient.onMessage((m) => {
-      const forRoom = m.room || roomRef.current
-      if (forRoom !== roomRef.current) return
-      updatePreview(forRoom, m.text, m.ts)
-      setMessages((prev) =>
-        appendUniqueBounded(prev, {
-          id: m.id,
-          nick: m.nick,
-          text: m.text,
-          ts: m.ts,
-          self: m.self,
-          deviceKey: m.deviceKey,
-          identity: m.identity,
-        })
-      )
+    const off = messengerClient.onTimeline((item) => {
+      if (item.room !== roomRef.current) return
+      setTimeline((current) => mergeTimelineItems(current, item))
     })
     return () => off()
-  }, [updatePreview])
+  }, [])
+
+  const timelineLabels = useMemo(() => timelineIdentityLabels(timeline), [timeline])
+
+  useEffect(() => {
+    const latest = timeline[timeline.length - 1]
+    if (room && latest) updatePreview(room, formatTimelineItem(latest, timelineLabels), latest.ts)
+  }, [room, timeline, timelineLabels, updatePreview])
 
   useEffect(() => {
     const off = messengerClient.onDirectMessage((m) => {
@@ -143,17 +134,41 @@ function ChatPage(): React.JSX.Element {
       if (event.room !== roomRef.current) return
       if (event.status === 'reconnecting') {
         setStatus('reconnecting')
+        setPresence(null)
         setError(null)
       } else if (event.status === 'connected') {
+        setRoomState(event.state)
+        setPresence(event.presence)
+        setTimeline(event.timeline.items)
+        setHasOlder(event.timeline.hasMore)
+        updateName(event.room, event.state.name)
         setStatus('connected')
         setError(null)
       } else {
         setStatus('error')
-        setError('Unable to restore the room connection.')
+        setPresence(null)
+        setError(event.message)
       }
     })
     return () => off()
+  }, [updateName])
+
+  useEffect(() => {
+    const off = messengerClient.onRoomPresence((next) => {
+      if (next.roomId === roomRef.current) setPresence(next)
+    })
+    return () => off()
   }, [])
+
+  useEffect(() => {
+    const off = messengerClient.onRoomState((next) => {
+      if (next.roomId === roomRef.current) {
+        setRoomState(next)
+        updateName(next.roomId, next.name)
+      }
+    })
+    return () => off()
+  }, [updateName])
 
   const openRoom = useCallback((r: FollowedRoom) => {
     setRoom(r.room)
@@ -162,9 +177,9 @@ function ChatPage(): React.JSX.Element {
   }, [])
 
   const handleOpenDm = useCallback(
-    (m: ChatMsg) => {
-      if (!m.identity || !m.deviceKey || m.self) return
-      const peerKey = openDm(m.identity, m.deviceKey)
+    (message: ChatTimelineMessage) => {
+      if (message.self) return
+      const peerKey = openDm(message.identity, message.actorKey)
       setDmError(null)
       setActiveDm(peerKey)
     },
@@ -195,9 +210,7 @@ function ChatPage(): React.JSX.Element {
       if (res.identity) setIdentity(res.identity)
       if (!res.sent) {
         setDmInput(text)
-        if (res.pendingMembership)
-          setDmError('Awaiting membership: the room owner must approve you before you can send.')
-        else if (res.needsLink) setDmError('Link your wallet to send messages.')
+        if (res.needsLink) setDmError('Link your wallet to send messages.')
         return
       }
       appendSelf(activeDm, { id: res.id ?? '', text, ts: res.ts ?? Date.now(), self: true })
@@ -225,21 +238,6 @@ function ChatPage(): React.JSX.Element {
     [add, openRoom]
   )
 
-  const enableMessengerNetworking = useCallback(async () => {
-    if (networkEnabled || enablingNetwork) return
-    setEnablingNetwork(true)
-    setError(null)
-    try {
-      const res = await messengerClient.updateSettings({ networkEnabled: true })
-      if (!res.success) throw new Error('Failed to enable Messenger networking')
-      setNetworkEnabled(true)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setEnablingNetwork(false)
-    }
-  }, [networkEnabled, enablingNetwork])
-
   const handleRemove = useCallback(
     (r: string) => {
       remove(r)
@@ -251,6 +249,11 @@ function ChatPage(): React.JSX.Element {
   const send = useCallback(async () => {
     const text = input.trim()
     if (!text || status !== 'connected') return
+    const ownKey = identityRef.current?.identityKey
+    if (roomState?.writePolicy === 'admins' && (!ownKey || !roomState.admins.includes(ownKey))) {
+      setError('This room is read-only for non-admins.')
+      return
+    }
     setInput('')
     setError(null)
     try {
@@ -258,18 +261,47 @@ function ChatPage(): React.JSX.Element {
       if (res.identity) setIdentity(res.identity)
       if (!res.sent) {
         setInput(text)
-        if (res.pendingMembership) setError('Awaiting membership: the room owner must approve you before you can post.')
-        else if (res.needsLink) setError('Link your wallet to send messages.')
+        if (res.needsLink) setError('Link your wallet to send messages.')
         return
       }
-      const me = identityRef.current
-      const meNick = me?.domain || me?.addressShort || (me?.deviceKey ? `#${me.deviceKey.slice(0, 8)}` : '')
-      setMessages((prev) => appendUniqueBounded(prev, { id: res.id, nick: meNick, text, ts: res.ts, self: true }))
+      setTimeline((current) => mergeTimelineItems(current, res.item))
     } catch (e) {
       setInput(text)
       setError(e instanceof Error ? e.message : String(e))
     }
-  }, [input, status])
+  }, [input, status, roomState])
+
+  const mutateRoom = useCallback(async (mutation: Parameters<typeof messengerClient.mutate>[0]) => {
+    setError(null)
+    try {
+      const result = await messengerClient.mutate(mutation)
+      setTimeline((current) => mergeTimelineItems(current, result.item))
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    }
+  }, [])
+
+  const loadOlder = useCallback(async () => {
+    const first = timeline[0]
+    if (!first || loadingOlder || !hasOlder) return
+    setLoadingOlder(true)
+    try {
+      const page = await messengerClient.timelineBefore(first.seqno, 100)
+      setHasOlder(page.hasMore)
+      setTimeline((current) => mergeTimelineItems(current, page.items, Number.POSITIVE_INFINITY))
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setLoadingOlder(false)
+    }
+  }, [timeline, loadingOlder, hasOlder])
+
+  const ownKey = identity?.identityKey
+  const canAdmin = Boolean(ownKey && roomState?.admins.includes(ownKey))
+  const canModerate = Boolean(canAdmin || (ownKey && roomState?.moderators.includes(ownKey)))
+  const canWrite = Boolean(roomState?.writePolicy !== 'admins' || canAdmin)
+  const followedRoom = rooms.find((entry) => entry.room === room)
+  const pendingRoomName = followedRoom?.alias || followedRoom?.name
 
   return (
     <div
@@ -303,17 +335,24 @@ function ChatPage(): React.JSX.Element {
       ) : (
         <ChatRoomView
           room={room}
+          pendingRoomName={pendingRoomName}
+          roomState={roomState}
+          onlineUsers={presence?.roomId === room ? presence.onlineUsers : null}
+          canAdmin={canAdmin}
+          canModerate={canModerate}
+          canWrite={canWrite}
+          hasOlder={hasOlder && timeline.length > 0}
+          loadingOlder={loadingOlder}
           status={status}
           error={error}
-          networkEnabled={networkEnabled}
-          networkEnabling={enablingNetwork}
-          messages={messages}
+          timeline={timeline}
           input={input}
           onInput={setInput}
           onSend={send}
           onLeave={leaveRoom}
           onOpenDm={handleOpenDm}
-          onEnableNetworking={enableMessengerNetworking}
+          onMutate={mutateRoom}
+          onLoadOlder={loadOlder}
         />
       )}
 

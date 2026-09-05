@@ -159,14 +159,14 @@ describe('isValidSettingsObject', () => {
     })
 
     describe('messenger settings', () => {
-      it('accepts valid networkEnabled boolean', () => {
-        expect(isValidSettingsObject({ messenger: { networkEnabled: true } })).toBe(true)
-        expect(isValidSettingsObject({ messenger: { networkEnabled: false } })).toBe(true)
+      it('accepts a valid autostart boolean', () => {
+        expect(isValidSettingsObject({ messenger: { autostart: true } })).toBe(true)
+        expect(isValidSettingsObject({ messenger: { autostart: false } })).toBe(true)
       })
 
-      it('rejects if networkEnabled is not a boolean', () => {
-        expect(isValidSettingsObject({ messenger: { networkEnabled: 'true' } })).toBe(false)
-        expect(isValidSettingsObject({ messenger: { networkEnabled: 1 } })).toBe(false)
+      it('rejects if autostart is not a boolean', () => {
+        expect(isValidSettingsObject({ messenger: { autostart: 'true' } })).toBe(false)
+        expect(isValidSettingsObject({ messenger: { autostart: 1 } })).toBe(false)
       })
     })
 
@@ -208,7 +208,7 @@ describe('validateSettings', () => {
       expect(result.data.network.proxyPort).toBe(8080)
       expect(result.data.privacy.clearOnExit).toBe(true)
       expect(result.data.wallet.paymentMode).toBe('off')
-      expect(result.data.messenger.networkEnabled).toBe(false)
+      expect(result.data.messenger.autostart).toBe(false)
       expect(result.data.advanced.displayUnicodeDomains).toBe(false)
       expect(result.data.advanced.tonConnectEnabled).toBe(false)
     }

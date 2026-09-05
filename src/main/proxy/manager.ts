@@ -58,7 +58,6 @@ type ProxySettingsSnapshot = {
   tunnelMode: 'standard' | 'maximum'
   general: GeneralSettings
   proxyVerbosity: number
-  messengerNetworkEnabled: boolean
 }
 
 export class ProxyManager extends EventEmitter {
@@ -75,7 +74,6 @@ export class ProxyManager extends EventEmitter {
   private resolveSol: boolean = DEFAULT_SETTINGS.resolveSol
   private solRpc: string = DEFAULT_SETTINGS.solRpc
   private proxyVerbosity: number = DEFAULT_SETTINGS.proxyVerbosity
-  private messengerNetworkEnabled: boolean = DEFAULT_SETTINGS.messenger.networkEnabled
   private lifecycleTail: Promise<void> = Promise.resolve()
   private readonly cancellableOperations = new Set<AbortController>()
   private sharedStart: Promise<void> | null = null
@@ -111,7 +109,6 @@ export class ProxyManager extends EventEmitter {
     const network = source?.network ?? getSetting('network')
     const advanced = source?.advanced ?? getSetting('advanced')
     const general = source?.general ?? getSetting('general')
-    const messenger = source?.messenger ?? getSetting('messenger')
     return {
       port: validatePort(network.proxyPort, DEFAULT_SETTINGS.proxyPort),
       wsPort: validatePort(network.wsPort, DEFAULT_SETTINGS.wsPort),
@@ -124,14 +121,12 @@ export class ProxyManager extends EventEmitter {
         solRpc: general.solRpc.trim(),
       },
       proxyVerbosity: Math.max(0, Math.min(3, advanced.proxyVerbosity)),
-      messengerNetworkEnabled: messenger.networkEnabled,
     }
   }
 
   private bridgeStartOptions(settings: ProxySettingsSnapshot) {
     return {
       verbosity: settings.proxyVerbosity,
-      messengerNetworkEnabled: settings.messengerNetworkEnabled,
     }
   }
 
@@ -145,7 +140,6 @@ export class ProxyManager extends EventEmitter {
     this.resolveSol = settings.general.resolveSol
     this.solRpc = settings.general.solRpc
     this.proxyVerbosity = settings.proxyVerbosity
-    this.messengerNetworkEnabled = settings.messengerNetworkEnabled
   }
 
   private static MAX_START_RETRIES = 3
@@ -204,7 +198,6 @@ export class ProxyManager extends EventEmitter {
         await this.bridge.start(settings.wsPort, this.bridgeStartOptions(settings), signal)
         if (signal.aborted) throw new Error('Proxy start aborted')
         this.wsPort = settings.wsPort
-        this.messengerNetworkEnabled = settings.messengerNetworkEnabled
         this.setStatus('connected')
         return
       } catch (error) {
@@ -447,7 +440,6 @@ export class ProxyManager extends EventEmitter {
       await this.bridge.start(settings.wsPort, this.bridgeStartOptions(settings), signal)
       if (signal.aborted) throw new Error('Bridge restart aborted')
       this.wsPort = settings.wsPort
-      this.messengerNetworkEnabled = settings.messengerNetworkEnabled
       this.setStatus('connected')
     })
   }
@@ -466,8 +458,7 @@ export class ProxyManager extends EventEmitter {
         settings.general.resolveSol !== this.resolveSol ||
         settings.general.solRpc !== this.solRpc ||
         settings.proxyVerbosity !== this.proxyVerbosity
-      const bridgeChanged =
-        settings.wsPort !== this.wsPort || settings.messengerNetworkEnabled !== this.messengerNetworkEnabled
+      const bridgeChanged = settings.wsPort !== this.wsPort
 
       if (!this.process) {
         if (this.shouldRun) {
@@ -495,7 +486,6 @@ export class ProxyManager extends EventEmitter {
         if (signal.aborted) throw new Error('Settings apply aborted')
         if (bridgeChanged) {
           this.wsPort = settings.wsPort
-          this.messengerNetworkEnabled = settings.messengerNetworkEnabled
         }
         this.setStatus('connected')
         return { bridgeRestarted: true }

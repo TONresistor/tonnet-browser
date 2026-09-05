@@ -11,6 +11,7 @@ Exact immutable commits and build entrypoints live in `scripts/binary-versions.j
 | Tonutils Storage | v1.5.3  | `xssnick/tonutils-storage`    | TON Storage daemon                   |
 | GoCoon           | v0.3.0  | `TONresistor/gocoon`          | Cocoon wallet and channel operations |
 | Cocoon Runner    | v0.3.0  | `TONresistor/gocoon`          | Local Cocoon runtime                 |
+| Messenger        | v0.4.0+dev.b164900 | `TONresistor/tonnet-messenger` | Independent TON QUIC room client |
 
 ## Application packages
 

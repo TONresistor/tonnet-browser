@@ -205,12 +205,4 @@ describe('services composition root', () => {
       expect(spy).toHaveBeenCalledOnce()
     }
   })
-
-  it('disconnects chat after an unexpected native Bridge exit', async () => {
-    const disconnect = vi.spyOn(registry.chatSessionController, 'disconnect').mockResolvedValue()
-
-    registry.proxyManager.emit('bridge-exit', 1)
-
-    await vi.waitFor(() => expect(disconnect).toHaveBeenCalledOnce())
-  })
 })

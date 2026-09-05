@@ -17,10 +17,6 @@ import { CHAT_NAMESPACES, DEFAULT_NAMESPACE_STATE, REQUIRED_NAMESPACES } from '.
 const log = createLogger('proxy')
 const MESSENGER_NAMESPACES_MANAGED_KEY = '_messengerNamespacesManaged'
 
-interface ApplyBridgeDefaultsOptions {
-  enableChatNamespaces?: boolean
-}
-
 type NamespaceRecord = Record<string, Record<string, unknown>>
 type BridgeConfigJson = Record<string, unknown> & { namespaces?: NamespaceRecord }
 
@@ -35,21 +31,16 @@ function setNamespaceEnabled(ns: NamespaceRecord, name: string, enabled: boolean
   return true
 }
 
-function applyMessengerNamespaceState(config: BridgeConfigJson, enabled: boolean): boolean {
+function clearLegacyMessengerNamespaceState(config: BridgeConfigJson): boolean {
+  if (!(MESSENGER_NAMESPACES_MANAGED_KEY in config)) return false
   const ns = namespaceRecord(config)
-  if (!ns) return false
-
-  let changed = false
-  if (enabled || config[MESSENGER_NAMESPACES_MANAGED_KEY] === true) {
+  if (ns && config[MESSENGER_NAMESPACES_MANAGED_KEY] === true) {
     for (const name of CHAT_NAMESPACES) {
-      changed = setNamespaceEnabled(ns, name, enabled) || changed
+      setNamespaceEnabled(ns, name, false)
     }
   }
-  if (config[MESSENGER_NAMESPACES_MANAGED_KEY] !== enabled) {
-    config[MESSENGER_NAMESPACES_MANAGED_KEY] = enabled
-    changed = true
-  }
-  return changed
+  delete config[MESSENGER_NAMESPACES_MANAGED_KEY]
+  return true
 }
 
 /**
@@ -58,7 +49,7 @@ function applyMessengerNamespaceState(config: BridgeConfigJson, enabled: boolean
  * preserves user overrides on subsequent launches via _browserDefaults flag.
  * Required namespaces are always re-enforced regardless.
  */
-export async function applyBridgeDefaults(workDir: string, options: ApplyBridgeDefaultsOptions = {}): Promise<void> {
+export async function applyBridgeDefaults(workDir: string): Promise<void> {
   const configPath = path.join(workDir, 'config.json')
 
   try {
@@ -75,7 +66,7 @@ export async function applyBridgeDefaults(workDir: string, options: ApplyBridgeD
           }
         }
       }
-      changed = applyMessengerNamespaceState(config, options.enableChatNamespaces === true) || changed
+      changed = clearLegacyMessengerNamespaceState(config) || changed
       if (changed) {
         await writeSecureJsonAtomicAsync(configPath, config)
         log.debug('Re-enforced managed bridge namespaces')
@@ -91,7 +82,7 @@ export async function applyBridgeDefaults(workDir: string, options: ApplyBridgeD
         ns[name].enabled = enabled
       }
     }
-    applyMessengerNamespaceState(config, options.enableChatNamespaces === true)
+    clearLegacyMessengerNamespaceState(config)
     config._browserDefaults = true
     await writeSecureJsonAtomicAsync(configPath, config)
 

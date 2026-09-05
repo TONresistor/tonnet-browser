@@ -82,6 +82,6 @@ export const DEFAULT_SETTINGS = {
   },
 
   messenger: {
-    networkEnabled: false,
+    autostart: false,
   },
 } as const

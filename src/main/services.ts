@@ -25,7 +25,6 @@ import type { ISecureStorage } from './ports/secure-storage'
 import { emitContractToRenderer } from './events/renderer-events'
 import type { CocoonActivationPorts } from './cocoon/activation'
 import { TabManager } from './windows/tabs'
-import { ChatSessionController, type ChatRuntimeSession } from './chat/session-controller'
 import { ConsumedArchive } from './cocoon/consumed-archive'
 import { RecoveryQueueStore } from './cocoon/recovery-queue'
 import { StakeCacheStore } from './cocoon/stake-cache'
@@ -40,21 +39,21 @@ import {
 } from '../shared/ipc-contract/wallet'
 import { DisposableStore, onEmitter } from './utils/disposable'
 import { SettingsCoordinator } from './settings/coordinator'
-import { createLogger } from '../shared/logger'
 import { getSetting } from './settings'
 import { TonIndexerClient } from './indexer/client'
 import { TonBridgeRuntime } from './ton-bridge/runtime'
 import { TonBridgeCoordinator } from './ton-bridge/coordinator'
 import { mapBridgeProvider, type BridgeProvider } from './ports/bridge-provider'
-import type { MessengerBridgePort, TonBridgePort } from './ports/ton-bridge'
+import type { TonBridgePort } from './ports/ton-bridge'
 import type { WalletBridgePort } from './wallet/bridge-port'
+import { MessengerClientManager } from './messenger/client-manager'
+import { createLogger } from '../shared/logger'
 
 const log = createLogger('services')
 
 export interface TonBridgeProviders {
   wallet: BridgeProvider<WalletBridgePort>
   ton: BridgeProvider<TonBridgePort>
-  messenger: BridgeProvider<MessengerBridgePort>
 }
 
 export interface ServiceRegistry {
@@ -81,7 +80,7 @@ export interface ServiceRegistry {
   recoveryDriver: RecoveryDriver
   cocoonActivation: CocoonActivationPorts
   tabManager: TabManager
-  chatSessionController: ChatSessionController<ChatRuntimeSession>
+  messengerClientManager: MessengerClientManager
   cocoonPersistence: CocoonPersistence
   settingsCoordinator: SettingsCoordinator
 }
@@ -96,7 +95,7 @@ export function createServices(): ServiceRegistry {
   const storageManager = new StorageManager()
   const overlayManager = new OverlayManager()
   const tabManager = new TabManager(getSetting('appearance').defaultZoom)
-  const chatSessionController = new ChatSessionController<ChatRuntimeSession>()
+  const messengerClientManager = new MessengerClientManager()
   const cocoonPersistence: CocoonPersistence = {
     consumedArchive: new ConsumedArchive(undefined, secureStorage),
     recoveryQueue: new RecoveryQueueStore(undefined, secureStorage),
@@ -118,7 +117,6 @@ export function createServices(): ServiceRegistry {
   const tonBridgeProviders: TonBridgeProviders = {
     wallet: mapBridgeProvider(tonBridgeRuntime, (bridge): WalletBridgePort => bridge),
     ton: mapBridgeProvider(tonBridgeRuntime, (bridge): TonBridgePort => bridge),
-    messenger: mapBridgeProvider(tonBridgeRuntime, (bridge): MessengerBridgePort => bridge),
   }
   const tonBridgeCoordinator = new TonBridgeCoordinator(proxyManager, tonBridgeRuntime, bridgeInterceptor)
   const paymentPolicyStore = new PaymentPolicyStore()
@@ -136,11 +134,6 @@ export function createServices(): ServiceRegistry {
             : walletPaymentFailedContract
       emitContractToRenderer(contract, notification)
     }
-  )
-  lifecycleRegistrations.add(
-    onEmitter(proxyManager, 'bridge-exit', () => {
-      void chatSessionController.disconnect().catch((error) => log.error(`Failed to disconnect chat: ${String(error)}`))
-    })
   )
   const tonConnectSessionStore = new TonConnectSessionStore()
   const tonConnectService = new TonConnectService(
@@ -190,7 +183,6 @@ export function createServices(): ServiceRegistry {
     tonConnectService,
     bridgePermissionStore,
     tabManager,
-    chatSessionController,
   })
 
   lifecycleRegistrations.add(
@@ -226,7 +218,7 @@ export function createServices(): ServiceRegistry {
     recoveryDriver,
     cocoonActivation,
     tabManager,
-    chatSessionController,
+    messengerClientManager,
     cocoonPersistence,
     settingsCoordinator,
   }
@@ -239,7 +231,7 @@ export async function destroyServices(registry: ServiceRegistry): Promise<void> 
   await registry.historyManager.onAppExit()
 
   registry.tabManager.dispose()
-  await registry.chatSessionController.disconnect()
+  await registry.messengerClientManager.stop()
 
   registry.paymentInterceptor.destroy()
   await registry.paymentPolicyStore.destroy()

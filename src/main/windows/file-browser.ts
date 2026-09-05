@@ -154,7 +154,7 @@ export function generateFileBrowserPage(
     * { margin: 0; padding: 0; box-sizing: border-box; }
     :root {
       --bg: hsl(210 32% 9%);
-      --panel: hsl(210 26% 13%);
+      --panel: hsl(213 22% 18%);
       --fg: hsl(0 0% 96%);
       --muted: hsl(210 18% 52%);
       --primary: hsl(200 100% 46%);

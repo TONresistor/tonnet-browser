@@ -43,7 +43,7 @@ afterEach(() => {
   }
 })
 
-describe('bridge config writer messenger namespaces', () => {
+describe('bridge config writer namespace defaults', () => {
   it('defaults chat namespaces off and required namespaces on', async () => {
     const dir = makeWorkDir(baseConfig())
 
@@ -51,7 +51,7 @@ describe('bridge config writer messenger namespaces', () => {
 
     const config = readConfig(dir)
     expect(config._browserDefaults).toBe(true)
-    expect(config._messengerNamespacesManaged).toBe(false)
+    expect(config).not.toHaveProperty('_messengerNamespacesManaged')
     expect(config.namespaces.lite.enabled).toBe(true)
     expect(config.namespaces.wallet.enabled).toBe(true)
     expect(config.namespaces.subscribe.enabled).toBe(true)
@@ -61,20 +61,17 @@ describe('bridge config writer messenger namespaces', () => {
     expect(config.namespaces.dht.enabled).toBe(false)
   })
 
-  it('enables and disables chat namespaces when Messenger manages them', async () => {
-    const dir = makeWorkDir(baseConfig())
+  it('cleans namespaces enabled by the former Messenger integration', async () => {
+    const dir = makeWorkDir({
+      ...baseConfig(),
+      _browserDefaults: true,
+      _messengerNamespacesManaged: true,
+    })
+
     await applyBridgeDefaults(dir)
 
-    await applyBridgeDefaults(dir, { enableChatNamespaces: true })
-    let config = readConfig(dir)
-    expect(config._messengerNamespacesManaged).toBe(true)
-    expect(config.namespaces.adnl.enabled).toBe(true)
-    expect(config.namespaces.overlay.enabled).toBe(true)
-    expect(config.namespaces.dht.enabled).toBe(true)
-
-    await applyBridgeDefaults(dir, { enableChatNamespaces: false })
-    config = readConfig(dir)
-    expect(config._messengerNamespacesManaged).toBe(false)
+    const config = readConfig(dir)
+    expect(config).not.toHaveProperty('_messengerNamespacesManaged')
     expect(config.namespaces.adnl.enabled).toBe(false)
     expect(config.namespaces.overlay.enabled).toBe(false)
     expect(config.namespaces.dht.enabled).toBe(false)
@@ -84,7 +81,6 @@ describe('bridge config writer messenger namespaces', () => {
     const dir = makeWorkDir({
       ...baseConfig(),
       _browserDefaults: true,
-      _messengerNamespacesManaged: false,
     })
 
     await applyBridgeDefaults(dir)

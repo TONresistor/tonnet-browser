@@ -147,8 +147,8 @@ export const AdvancedSection = memo(function AdvancedSection({
         </div>
         <SettingRow label={t('advanced.experimental.messenger')} description={t('advanced.experimental.messengerDesc')}>
           <Toggle
-            checked={draft.messengerNetworkEnabled}
-            onChange={(v) => setDraft('messengerNetworkEnabled', v)}
+            checked={draft.messengerAutostart}
+            onChange={(v) => setDraft('messengerAutostart', v)}
             ariaLabel={t('advanced.experimental.messenger')}
           />
         </SettingRow>

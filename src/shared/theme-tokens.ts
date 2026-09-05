@@ -71,7 +71,7 @@ export const THEME_TOKEN_CSS_VARIABLES = {
 
 export const BUILT_IN_THEME_COLORS = {
   'resistance-dog': {
-    background: '210 26% 13%',
+    background: '213 22% 18%',
     backgroundSecondary: '210 32% 9%',
     textPrimary: '0 0% 96%',
     textSecondary: '210 16% 60%',

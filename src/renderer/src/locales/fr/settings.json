@@ -276,8 +276,8 @@
     "syncTestDomainDesc": "Domaine utilisé pour vérifier la synchronisation DHT",
     "experimental": {
       "title": "Fonctionnalités expérimentales",
-      "messenger": "Messenger",
-      "messengerDesc": "Active le chat expérimental. ADNL, Overlay et DHT sont activés automatiquement sur le bridge.",
+      "messenger": "Démarrer Messenger avec Browser",
+      "messengerDesc": "Démarre automatiquement le client Messenger à l’ouverture de Browser.",
       "unicodeDomains": "Domaines Unicode (IDN)",
       "unicodeDomainsDesc": "Affiche les domaines russes, emoji et internationaux au lieu du Punycode xn--. Le Punycode réapparaît pendant la modification.",
       "tonConnect": "Wallet TON Connect intégré",

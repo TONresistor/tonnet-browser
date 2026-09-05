@@ -230,12 +230,8 @@ import { IPC_CHANNELS } from '../../../shared/ipc-channels'
 import { getSetting, SettingsRuntimeApplyError } from '../../settings'
 import type { ServiceRegistry } from '../../services'
 import { DisposableStore } from '../../utils/disposable'
-import { overlayIdB64ForRoom } from '../../chat/room'
-import { broadcastId, parseBroadcast, sealBroadcast } from '../../chat/broadcast'
-import { marshalEnvelope, parseEnvelope, signEnvelope } from '../../chat/envelope'
 import { generateCocoonWallet, loadCocoonWallet, markSetupComplete } from '../../cocoon/wallet'
 import { getOwnerBalance, getCocoonWalletBalance, fundCocoonFromOwner } from '../../cocoon/setup'
-import { ChatSessionController } from '../../chat/session-controller'
 import { AppSettingsSchema } from '../../../shared/types'
 
 // Build mock service registry from the mock emitters
@@ -438,6 +434,8 @@ function createMockRegistry(): ServiceRegistry {
       showActiveView,
       loadBagFile: tabsMocks.loadBagFile,
       cancelNavigation: tabsMocks.cancelNavigation,
+      reloadActivePage: vi.fn(() => true),
+      stopActivePage: vi.fn(() => true),
       updateSidebarWidth: vi.fn(),
       updateWalletSidebarWidth: vi.fn(),
       onAppearanceSettingsChanged: vi.fn(),
@@ -446,7 +444,7 @@ function createMockRegistry(): ServiceRegistry {
       initialize: vi.fn(),
       dispose: vi.fn(),
     } as any,
-    chatSessionController: new ChatSessionController() as any,
+    messengerClientManager: new EventEmitter() as any,
     cocoonPersistence: {
       stakeCache: { getPendingWithdraw: vi.fn(() => Promise.resolve(null)) },
       consumedArchive: { list: vi.fn(() => Promise.resolve([])), getByArchivedAt: vi.fn(() => Promise.resolve(null)) },
@@ -504,6 +502,20 @@ function resetHandlersTestEnv(): void {
 
 describe('IPC Handlers', () => {
   beforeEach(resetHandlersTestEnv)
+
+  it('routes Stop through navigation ownership instead of stopping a hidden retained view', async () => {
+    const stop = vi.fn()
+    getActiveView.mockReturnValueOnce({ webContents: { stop } })
+    vi.mocked(mockRegistry.tabManager.stopActivePage).mockReturnValueOnce(false)
+    await expect(mockHandlers.get(IPC_CHANNELS.STOP)!(createMockEvent())).resolves.toEqual({ success: false })
+    expect(mockRegistry.tabManager.stopActivePage).toHaveBeenCalledOnce()
+    expect(stop).not.toHaveBeenCalled()
+  })
+
+  it('routes Reload through the cancellation-aware page lifecycle', async () => {
+    await expect(mockHandlers.get(IPC_CHANNELS.RELOAD)!(createMockEvent())).resolves.toEqual({ success: true })
+    expect(mockRegistry.tabManager.reloadActivePage).toHaveBeenCalledExactlyOnceWith(false)
+  })
 
   it('owns every handler and push listener in a disposable registration scope', () => {
     const handlerCount = mockHandlers.size
@@ -1258,254 +1270,6 @@ describe('IPC Handlers', () => {
       expect(loggingMocks.flushNativeLogs.mock.invocationCallOrder[0]).toBeLessThan(
         loggingMocks.clipboardWriteText.mock.invocationCallOrder[0]
       )
-    })
-  })
-
-  describe('Chat Handlers', () => {
-    it('reports disabled Messenger networking without collapsing it to an internal error', async () => {
-      vi.mocked(getSetting).mockImplementation(((category: string) => {
-        if (category === 'messenger') return { networkEnabled: false, attachWalletIdentity: false }
-        return {}
-      }) as typeof getSetting)
-      const handler = mockHandlers.get(IPC_CHANNELS.CHAT_CONNECT)!
-
-      const result = await handler(createMockEvent(), 'tonnet:groupchat', undefined)
-
-      expect(result).toEqual({
-        ok: false,
-        error: { code: 'MESSENGER_DISABLED', message: 'Messenger networking is disabled', retryable: false },
-      })
-    })
-
-    it('rejects a candidate when its challenge-bearing presence cannot be sent', async () => {
-      const room = 'tonnet:groupchat'
-      const bootstrap = Buffer.alloc(32, 9).toString('base64')
-      const bridge = {
-        dhtFindValue: vi.fn(),
-        dhtFindOverlayNodes: vi.fn(() => Promise.resolve({ nodes: [], count: 0 })),
-        overlayConnectAndJoin: vi.fn(() => Promise.resolve('peer-id')),
-        overlayQuery: vi.fn((_overlay: string, data: string) => {
-          if (data === 'onDZSA==') {
-            const response = Buffer.alloc(40)
-            Buffer.from('4c34c713', 'hex').copy(response)
-            Buffer.alloc(32, 0x42).copy(response, 4)
-            response.writeInt32LE(Math.floor(Date.now() / 1000) + 60, 36)
-            return Promise.resolve(response.toString('base64'))
-          }
-          const response = Buffer.alloc(8)
-          Buffer.from('47a0c32f', 'hex').copy(response)
-          response.writeInt32LE(Math.floor(Date.now() / 1000), 4)
-          return Promise.resolve(response.toString('base64'))
-        }),
-        onOverlayMessage: vi.fn(() => vi.fn()),
-        overlaySendRaw: vi.fn(() => Promise.reject(new Error('presence send failed'))),
-        overlayLeaveAndDisconnect: vi.fn(() => Promise.resolve()),
-        adnlPing: vi.fn(() => Promise.resolve()),
-      }
-      vi.mocked(getSetting).mockImplementation(((category: string) => {
-        if (category === 'messenger') return { networkEnabled: true, attachWalletIdentity: false }
-        return {}
-      }) as typeof getSetting)
-      vi.mocked(mockRegistry.tonBridgeProviders.messenger.getBridge).mockReturnValue(bridge as any)
-
-      const connect = mockHandlers.get(IPC_CHANNELS.CHAT_CONNECT)!
-      const result = await connect(createMockEvent(), room, bootstrap)
-
-      expect(result).toMatchObject({
-        ok: false,
-        error: { code: 'ROOM_UNAVAILABLE', retryable: true },
-      })
-      expect(bridge.overlayLeaveAndDisconnect).toHaveBeenCalledWith(overlayIdB64ForRoom(room), 'peer-id')
-      expect(mockRegistry.chatSessionController.session).toBeNull()
-    })
-
-    it('returns the canonical public send id and emits replayed history inside the bounded window', async () => {
-      const room = 'tonnet:groupchat'
-      const overlayId = overlayIdB64ForRoom(room)
-      const bootstrap = Buffer.alloc(32, 9).toString('base64')
-      const history = ['first history message', 'second history message', 'third history message'].map(
-        (text, index) => {
-          const seed = Buffer.alloc(32, 19 + index)
-          const secondsAgo = 180 - index * 30
-          const env = signEnvelope(
-            { type: 'msg', nick: 'alice', text, ts: Date.now() - secondsAgo * 1_000, room },
-            seed
-          )
-          const wire = sealBroadcast(seed, marshalEnvelope(env), Math.floor(Date.now() / 1000) - secondsAgo)
-          return { env, wire, text }
-        }
-      )
-      let overlayMessage: ((data: { overlay_id: string; message: string }) => void) | null = null
-      let replayed = false
-      const bridge = {
-        dhtFindValue: vi.fn(),
-        dhtFindOverlayNodes: vi.fn(() => Promise.resolve({ nodes: [], count: 0 })),
-        overlayConnectAndJoin: vi.fn(() => Promise.resolve('peer-id')),
-        overlayQuery: vi.fn((_overlay: string, data: string) => {
-          if (data === 'onDZSA==') {
-            const response = Buffer.alloc(40)
-            Buffer.from('4c34c713', 'hex').copy(response)
-            Buffer.alloc(32, 0x42).copy(response, 4)
-            response.writeInt32LE(Math.floor(Date.now() / 1000) + 60, 36)
-            return Promise.resolve(response.toString('base64'))
-          }
-          const response = Buffer.alloc(8)
-          Buffer.from('47a0c32f', 'hex').copy(response)
-          response.writeInt32LE(Math.floor(Date.now() / 1000), 4)
-          return Promise.resolve(response.toString('base64'))
-        }),
-        onOverlayMessage: vi.fn((cb: (data: { overlay_id: string; message: string }) => void) => {
-          overlayMessage = cb
-          return vi.fn()
-        }),
-        overlaySendRaw: vi.fn(() => {
-          if (!replayed) {
-            replayed = true
-            for (const item of history) {
-              overlayMessage!({ overlay_id: overlayId, message: item.wire.toString('base64') })
-            }
-          }
-          return Promise.resolve()
-        }),
-        overlayLeaveAndDisconnect: vi.fn(() => Promise.resolve()),
-        adnlPing: vi.fn(() => Promise.resolve()),
-      }
-      vi.mocked(getSetting).mockImplementation(((category: string) => {
-        if (category === 'messenger') return { networkEnabled: true, attachWalletIdentity: false }
-        return {}
-      }) as typeof getSetting)
-      vi.mocked(mockRegistry.tonBridgeProviders.messenger.getBridge).mockReturnValue(bridge as any)
-
-      const connect = mockHandlers.get(IPC_CHANNELS.CHAT_CONNECT)!
-      const send = mockHandlers.get(IPC_CHANNELS.CHAT_SEND)!
-      const disconnect = mockHandlers.get(IPC_CHANNELS.CHAT_DISCONNECT)!
-      await connect(createMockEvent(), room, bootstrap)
-      await new Promise((resolve) => setImmediate(resolve))
-
-      for (const item of history) {
-        expect(mockMainWindow.webContents.send).toHaveBeenCalledWith(
-          IPC_CHANNELS.CHAT_MESSAGE,
-          expect.objectContaining({ room, text: item.text, deviceKey: item.env.key })
-        )
-      }
-
-      bridge.overlaySendRaw.mockClear()
-      const sent = await send(createMockEvent(), 'local message')
-      const sentCall = bridge.overlaySendRaw.mock.calls[0] as unknown as [string, string]
-      const sentWire = parseBroadcast(Buffer.from(sentCall[1], 'base64'))
-      expect(sentWire).not.toBeNull()
-      const sentEnvelope = parseEnvelope(sentWire!.data)
-      expect(sent).toMatchObject({
-        sent: true,
-        id: broadcastId(sentWire!.src, sentWire!.data, sentWire!.flags).toString('hex'),
-        ts: sentEnvelope.ts,
-      })
-
-      await disconnect(createMockEvent())
-    })
-
-    it('reconnects the active room after resetting the chat identity', async () => {
-      const room = 'tonnet:groupchat'
-      const bootstrap = Buffer.alloc(32, 9).toString('base64')
-      const bridge = {
-        dhtFindValue: vi.fn(),
-        dhtFindOverlayNodes: vi.fn(() => Promise.resolve({ nodes: [], count: 0 })),
-        overlayConnectAndJoin: vi.fn(() => Promise.resolve('new-peer-id')),
-        overlayQuery: vi.fn((_overlay: string, data: string) => {
-          if (data === 'onDZSA==') {
-            const response = Buffer.alloc(40)
-            Buffer.from('4c34c713', 'hex').copy(response)
-            Buffer.alloc(32, 0x42).copy(response, 4)
-            response.writeInt32LE(Math.floor(Date.now() / 1000) + 60, 36)
-            return Promise.resolve(response.toString('base64'))
-          }
-          const response = Buffer.alloc(8)
-          Buffer.from('47a0c32f', 'hex').copy(response)
-          response.writeInt32LE(Math.floor(Date.now() / 1000), 4)
-          return Promise.resolve(response.toString('base64'))
-        }),
-        onOverlayMessage: vi.fn(() => vi.fn()),
-        overlaySendRaw: vi.fn(() => Promise.resolve()),
-        overlayLeaveAndDisconnect: vi.fn(() => Promise.resolve()),
-        adnlPing: vi.fn(() => Promise.resolve()),
-      }
-      vi.mocked(getSetting).mockImplementation(((category: string) => {
-        if (category === 'messenger') return { networkEnabled: true, attachWalletIdentity: false }
-        return {}
-      }) as typeof getSetting)
-      vi.mocked(mockRegistry.tonBridgeProviders.messenger.getBridge).mockReturnValue(bridge as any)
-
-      const oldSession = {
-        room,
-        bootstrap,
-        overlayId: overlayIdB64ForRoom(room),
-        via: 'node',
-        peerId: 'old-peer-id',
-        clockOffsetSec: 0,
-        bindingChallenge: '',
-        gated: false,
-        cert: null,
-        dispose: vi.fn(() => Promise.resolve()),
-      }
-      await mockRegistry.chatSessionController.connect(room, async () => oldSession as any)
-
-      const reset = mockHandlers.get(IPC_CHANNELS.CHAT_RESET_IDENTITY)!
-      const result = await reset(createMockEvent())
-
-      expect(result.deviceKey).toMatch(/^[0-9a-f]{64}$/)
-      expect(oldSession.dispose).toHaveBeenCalledOnce()
-      expect(mockRegistry.chatSessionController.session).toMatchObject({ room, bootstrap, peerId: 'new-peer-id' })
-      expect(mockMainWindow.webContents.send).toHaveBeenCalledWith('chat:connection', {
-        room,
-        status: 'reconnecting',
-      })
-      expect(mockMainWindow.webContents.send).toHaveBeenCalledWith('chat:connection', {
-        room,
-        status: 'connected',
-      })
-    })
-
-    it('keeps the new identity when reconnecting after reset fails', async () => {
-      const room = 'tonnet:groupchat'
-      vi.mocked(getSetting).mockImplementation(((category: string) => {
-        if (category === 'messenger') return { networkEnabled: true, attachWalletIdentity: false }
-        return {}
-      }) as typeof getSetting)
-      vi.mocked(mockRegistry.tonBridgeProviders.messenger.getBridge).mockReturnValue(null)
-
-      const oldSession = {
-        room,
-        overlayId: overlayIdB64ForRoom(room),
-        via: 'dht',
-        peerId: 'old-peer-id',
-        clockOffsetSec: 0,
-        bindingChallenge: '',
-        gated: false,
-        cert: null,
-        dispose: vi.fn(() => Promise.resolve()),
-      }
-      await mockRegistry.chatSessionController.connect(room, async () => oldSession as any)
-
-      const reset = mockHandlers.get(IPC_CHANNELS.CHAT_RESET_IDENTITY)!
-      const result = await reset(createMockEvent())
-
-      expect(result.deviceKey).toMatch(/^[0-9a-f]{64}$/)
-      expect(mockRegistry.chatSessionController.session).toBeNull()
-      expect(mockMainWindow.webContents.send).toHaveBeenCalledWith('chat:connection', {
-        room,
-        status: 'error',
-      })
-    })
-
-    it('resets an idle identity without starting a chat connection', async () => {
-      const reset = mockHandlers.get(IPC_CHANNELS.CHAT_RESET_IDENTITY)!
-
-      const result = await reset(createMockEvent())
-
-      expect(result.deviceKey).toMatch(/^[0-9a-f]{64}$/)
-      expect(mockRegistry.chatSessionController.session).toBeNull()
-      expect(mockRegistry.tonBridgeProviders.messenger.getBridge).not.toHaveBeenCalled()
-      expect(mockMainWindow.webContents.send).not.toHaveBeenCalledWith('chat:connection', expect.anything())
     })
   })
 

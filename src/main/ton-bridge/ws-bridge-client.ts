@@ -239,6 +239,10 @@ export class WsBridgeClient {
     await this.overlay.ping(peerId)
   }
 
+  async overlayLeave(overlayIdB64: string): Promise<void> {
+    await this.overlay.leave(overlayIdB64)
+  }
+
   async overlayLeaveAndDisconnect(overlayIdB64: string, peerId: string): Promise<void> {
     await this.overlay.leaveAndDisconnect(overlayIdB64, peerId)
   }

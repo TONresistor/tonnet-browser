@@ -14,7 +14,6 @@ vi.mock('../index', async () => {
 })
 
 import { SettingsCoordinator, type SettingsRuntimeDependencies } from '../coordinator'
-import { ChatSessionController, type ChatRuntimeSession } from '../../chat/session-controller'
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -48,12 +47,6 @@ function createDependencies() {
       onAppearanceSettingsChanged: vi.fn(),
       applyDefaultZoom: vi.fn(),
       onPrivacySettingsChanged: vi.fn(() => Promise.resolve()),
-    },
-    chatSessionController: {
-      session: null,
-      runWhenIdle: vi.fn((operation: () => Promise<unknown>) => operation()),
-      runDisconnected: vi.fn((operation: () => Promise<unknown>) => operation()),
-      disconnect: vi.fn(() => Promise.resolve()),
     },
   } as unknown as SettingsRuntimeDependencies
 }
@@ -187,7 +180,6 @@ describe('SettingsCoordinator', () => {
       expect.objectContaining({ historyMode: 'memory' })
     )
     expect(settings.storage.downloadPath).toBe('/tmp/ton-browser/storage')
-    expect(dependencies.chatSessionController.runDisconnected).toHaveBeenCalledOnce()
     expect(mocks.emit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ reset: true, settings }))
   })
 
@@ -202,68 +194,6 @@ describe('SettingsCoordinator', () => {
 
     expect(dependencies.proxyManager.applySettingsChange).not.toHaveBeenCalled()
     expect(dependencies.storageManager.applySettingsChange).not.toHaveBeenCalled()
-  })
-
-  it('holds the chat lifecycle lock across a bridge-restarting transaction', async () => {
-    const dependencies = createDependencies()
-    vi.mocked(dependencies.chatSessionController.runWhenIdle).mockRejectedValueOnce(new Error('chat active'))
-    const coordinator = new SettingsCoordinator(dependencies)
-
-    await expect(coordinator.apply({ network: { proxyPort: 9000 } })).rejects.toThrow('chat active')
-
-    expect(dependencies.proxyManager.applySettingsChange).not.toHaveBeenCalled()
-    expect(dependencies.storageManager.applySettingsChange).not.toHaveBeenCalled()
-    expect(mocks.emit).not.toHaveBeenCalled()
-  })
-
-  it('disconnects Messenger inside the lifecycle lock when its network is disabled', async () => {
-    current = AppSettingsSchema.parse({ messenger: { networkEnabled: true } })
-    const dependencies = createDependencies()
-    const dispose = vi.fn(async () => undefined)
-    const controller = new ChatSessionController<ChatRuntimeSession>()
-    await controller.connect('room', async () => ({
-      room: 'room',
-      overlayId: 'overlay',
-      via: 'node',
-      peerId: 'peer',
-      clockOffsetSec: 0,
-      bindingChallenge: '00'.repeat(32),
-      gated: false,
-      cert: null,
-      dispose,
-    }))
-    dependencies.chatSessionController = controller
-    const coordinator = new SettingsCoordinator(dependencies)
-
-    await coordinator.apply({ messenger: { networkEnabled: false } })
-
-    expect(dispose).toHaveBeenCalledOnce()
-    expect(controller.state).toEqual({ kind: 'idle' })
-    expect(current.messenger.networkEnabled).toBe(false)
-  })
-
-  it('resets settings through a real disconnected chat lifecycle', async () => {
-    const dependencies = createDependencies()
-    const dispose = vi.fn(async () => undefined)
-    const controller = new ChatSessionController<ChatRuntimeSession>()
-    await controller.connect('room', async () => ({
-      room: 'room',
-      overlayId: 'overlay',
-      via: 'node',
-      peerId: 'peer',
-      clockOffsetSec: 0,
-      bindingChallenge: '00'.repeat(32),
-      gated: false,
-      cert: null,
-      dispose,
-    }))
-    dependencies.chatSessionController = controller
-    const coordinator = new SettingsCoordinator(dependencies)
-
-    await coordinator.reset()
-
-    expect(dispose).toHaveBeenCalledOnce()
-    expect(controller.state).toEqual({ kind: 'idle' })
   })
 
   it('applies download folder changes to the storage runtime', async () => {

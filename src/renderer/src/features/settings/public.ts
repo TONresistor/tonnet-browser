@@ -18,4 +18,3 @@ export const useShowBookmarksBar = () => usePreferencesStore((state) => state.sa
 export const useShowStatusBar = () => usePreferencesStore((state) => state.saved.showStatusBar)
 export const useTabOrientation = () => usePreferencesStore((state) => state.saved.tabOrientation)
 export const useSavedSidebarWidth = () => usePreferencesStore((state) => state.saved.sidebarWidth)
-export const useMessengerNetworkEnabled = () => usePreferencesStore((state) => state.saved.messengerNetworkEnabled)
