@@ -777,6 +777,38 @@ describe('Settings Persistence', () => {
   })
 
   describe('migrateMessengerAutostart()', () => {
+    it('loads a schema-3 profile without changing unrelated preferences and persists schema 4', async () => {
+      const { loadSettings, getDefaultSettings } = await import('../index')
+      const defaults = getDefaultSettings()
+      const profile = {
+        ...defaults,
+        schemaVersion: 3,
+        general: { ...defaults.general, homepage: 'ton://example.ton' },
+        appearance: { ...defaults.appearance, theme: 'utya-duck', defaultZoom: 120 },
+        wallet: { ...defaults.wallet, autoLockMinutes: 15 },
+        messenger: { networkEnabled: true },
+      }
+      vi.mocked(existsSync).mockReturnValue(true)
+      vi.mocked(readFileSync).mockReturnValue(JSON.stringify(profile))
+      const settings = loadSettings()
+      expect(settings).toMatchObject({
+        general: profile.general,
+        appearance: profile.appearance,
+        wallet: profile.wallet,
+        messenger: { autostart: true },
+      })
+      await vi.waitFor(() => expect(atomicFile.writeFile).toHaveBeenCalledOnce())
+      const persisted = JSON.parse(atomicFile.writeFile.mock.calls[0][0])
+      expect(persisted.schemaVersion).toBe(4)
+      expect(persisted.messenger).toEqual({ autostart: true })
+      vi.resetModules()
+      vi.mocked(readFileSync).mockReturnValue(JSON.stringify(persisted))
+      atomicFile.writeFile.mockClear()
+      const reloaded = (await import('../index')).loadSettings()
+      expect(reloaded).toEqual(settings)
+      expect(atomicFile.writeFile).not.toHaveBeenCalled()
+    })
+
     it('preserves the former Messenger opt-in', async () => {
       const { migrateMessengerAutostart } = await import('../index')
 

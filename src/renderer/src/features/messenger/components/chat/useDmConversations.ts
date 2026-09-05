@@ -6,6 +6,7 @@ export interface DmMessage {
   text: string
   ts: number
   self: boolean
+  room: string
 }
 
 export interface DmConversation {
@@ -18,14 +19,22 @@ export interface DmConversation {
 const MAX_MESSAGES = 500
 
 function withMessage(c: DmConversation, msg: DmMessage): DmConversation {
-  if (msg.id && c.messages.some((m) => m.id === msg.id)) return c
+  if (msg.id && c.messages.some((m) => m.id === msg.id && m.room === msg.room)) return c
   const messages = [...c.messages, msg].slice(-MAX_MESSAGES)
   return { ...c, messages }
 }
 
 export function useDmConversations(): {
   conversations: Record<string, DmConversation>
-  receive: (msg: { id: string; peerKey: string; text: string; ts: number; identity: ChatIdentityInfo }) => void
+  receive: (msg: {
+    room?: string
+    id: string
+    peerKey: string
+    text: string
+    ts: number
+    identity: ChatIdentityInfo
+    direction: 'sent' | 'received'
+  }) => void
   appendSelf: (peerKey: string, msg: DmMessage) => void
   open: (identity: ChatIdentityInfo, peerKey: string) => string
   remove: (peerKey: string) => void
@@ -33,15 +42,28 @@ export function useDmConversations(): {
   const [conversations, setConversations] = useState<Record<string, DmConversation>>({})
 
   const receive = useCallback(
-    (msg: { id: string; peerKey: string; text: string; ts: number; identity: ChatIdentityInfo }) => {
+    (msg: {
+      room?: string
+      id: string
+      peerKey: string
+      text: string
+      ts: number
+      identity: ChatIdentityInfo
+      direction: 'sent' | 'received'
+    }) => {
       const peerKey = msg.peerKey
       if (!peerKey) return
       setConversations((prev) => {
         const cur = prev[peerKey] ?? { peerKey, name: msg.identity.name, messages: [] }
-        const next = withMessage(
-          { ...cur, name: msg.identity.name, domain: msg.identity.domain, peerKey },
-          { id: msg.id, text: msg.text, ts: msg.ts, self: false }
-        )
+        const profile =
+          msg.direction === 'sent' ? cur : { ...cur, name: msg.identity.name, domain: msg.identity.domain, peerKey }
+        const next = withMessage(profile, {
+          id: msg.id,
+          text: msg.text,
+          ts: msg.ts,
+          self: msg.direction === 'sent',
+          room: msg.room ?? '',
+        })
         if (next === cur) return prev
         const out = { ...prev, [peerKey]: next }
         return out

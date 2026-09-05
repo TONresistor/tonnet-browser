@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - The default Resistance Dog background uses the updated dark palette.
 - Bundled helpers retain Bridge v0.5.1 and GoCoon v0.3.0, with Messenger pinned to v0.4.0+dev.b164900.
 
+### Fixed
+
+- Messenger timestamps, outgoing direct-message direction and duplicate send acknowledgements.
+- Stale room joins and history refreshes, helper crash recovery, bounded protocol frames and declared IPC errors.
+- Closing Messenger preserves joined-room caches; only an explicit leave removes membership.
+
 ### Compatibility
 
 - Messenger 0.4 rooms and identities are incompatible with the legacy overlay chat. Existing standalone-client state is preserved; legacy room names, wallet attribution and offline DM history are not converted.

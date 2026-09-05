@@ -47,6 +47,7 @@ const mockElectron = {
     mutate: vi.fn(),
     timelineBefore: vi.fn().mockResolvedValue({ items: [], hasMore: false }),
     disconnect: vi.fn().mockResolvedValue({ disconnected: true }),
+    leave: vi.fn().mockResolvedValue({ left: true }),
     identity: vi.fn().mockResolvedValue({
       identityKey: 'a'.repeat(43),
       name: '',
@@ -117,6 +118,7 @@ describe('ChatPage', () => {
     root = null
 
     expect(mockElectron.chat.disconnect).toHaveBeenCalledTimes(1)
+    expect(mockElectron.chat.leave).not.toHaveBeenCalled()
   })
 
   it('shows a connection error when chat.connect rejects', async () => {
@@ -168,6 +170,67 @@ describe('ChatPage', () => {
     })
 
     expect(container.querySelector('[title="Community"]')).toBeTruthy()
+    expect(mockElectron.chat.connect).toHaveBeenCalledOnce()
+  })
+
+  it('does not rejoin after canonicalizing a DNS-only favorite', async () => {
+    localStorage.setItem('groupchat.rooms', JSON.stringify([{ room: 'community.ton' }]))
+    await act(async () => {
+      root?.render(<ChatPage />)
+    })
+    await act(async () => {
+      ;(container.querySelector('[role="option"]') as HTMLElement).click()
+    })
+    expect(mockElectron.chat.connect).toHaveBeenCalledOnce()
+    expect(mockElectron.chat.connect).toHaveBeenCalledWith('community.ton', undefined)
+    expect(container.textContent).toContain('connected')
+    expect(JSON.parse(localStorage.getItem('messenger.rooms.v1')!)).toEqual([
+      expect.objectContaining({ room: ROOM, alias: 'community.ton' }),
+    ])
+  })
+
+  it('ignores a late join after switching to another room', async () => {
+    const other = 'R'.repeat(43)
+    localStorage.setItem('groupchat.rooms', JSON.stringify([{ room: ROOM }, { room: other }]))
+    let completeFirst!: (value: unknown) => void
+    mockElectron.chat.connect.mockReturnValueOnce(
+      new Promise((resolve) => {
+        completeFirst = resolve
+      })
+    )
+    mockElectron.chat.connect.mockResolvedValueOnce({
+      connected: true,
+      room: other,
+      via: 'dht',
+      state: { ...ROOM_STATE, roomId: other, name: 'Second room' },
+      connection: ROOM_CONNECTION,
+      presence: { ...ROOM_PRESENCE, roomId: other },
+      timeline: { items: [], hasMore: false },
+    })
+    await act(async () => {
+      root?.render(<ChatPage />)
+    })
+    const rows = container.querySelectorAll('[role="option"]')
+    await act(async () => {
+      ;(rows[0] as HTMLElement).click()
+    })
+    await act(async () => {
+      ;(rows[1] as HTMLElement).click()
+    })
+    await act(async () => {
+      completeFirst({
+        connected: true,
+        room: ROOM,
+        via: 'dht',
+        state: ROOM_STATE,
+        connection: ROOM_CONNECTION,
+        presence: ROOM_PRESENCE,
+        timeline: { items: [], hasMore: false },
+      })
+    })
+    expect(container.querySelector('[role="option"][aria-selected="true"]')?.textContent).toContain('Second room')
+    expect(mockElectron.chat.connect).toHaveBeenCalledTimes(2)
+    expect(mockElectron.chat.leave).not.toHaveBeenCalled()
   })
 
   it('updates node-local presence independently from room state', async () => {

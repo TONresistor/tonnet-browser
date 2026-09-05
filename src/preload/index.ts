@@ -116,6 +116,7 @@ import type {
   chatConnectContract,
   chatDetectDomainsContract,
   chatDisconnectContract,
+  chatLeaveContract,
   chatDmSendContract,
   chatMutateContract,
   chatTimelineBeforeContract,
@@ -391,20 +392,25 @@ const electronAPI = {
   chat: {
     connect: (room?: string, node?: string) =>
       invokeChannel<typeof chatConnectContract>(IPC_CHANNELS.CHAT_CONNECT, room, node),
-    send: (text: string) => invokeChannel<typeof chatSendContract>(IPC_CHANNELS.CHAT_SEND, text),
-    dmSend: (peerKey: string, text: string) =>
-      invokeChannel<typeof chatDmSendContract>(IPC_CHANNELS.CHAT_DM_SEND, peerKey, text),
-    mutate: (mutation: {
-      action: 'metadata' | 'pin' | 'unpin' | 'moderator-grant' | 'moderator-revoke' | 'write-policy'
-      name?: string
-      description?: string
-      messageId?: string
-      subjectKey?: string
-      anyoneCanWrite?: boolean
-    }) => invokeChannel<typeof chatMutateContract>(IPC_CHANNELS.CHAT_MUTATE, mutation),
-    timelineBefore: (beforeSeqno: number, limit?: number) =>
-      invokeChannel<typeof chatTimelineBeforeContract>(IPC_CHANNELS.CHAT_TIMELINE_BEFORE, beforeSeqno, limit),
+    send: (roomId: string, text: string) =>
+      invokeChannel<typeof chatSendContract>(IPC_CHANNELS.CHAT_SEND, roomId, text),
+    dmSend: (roomId: string, peerKey: string, text: string) =>
+      invokeChannel<typeof chatDmSendContract>(IPC_CHANNELS.CHAT_DM_SEND, roomId, peerKey, text),
+    mutate: (
+      roomId: string,
+      mutation: {
+        action: 'metadata' | 'pin' | 'unpin' | 'moderator-grant' | 'moderator-revoke' | 'write-policy'
+        name?: string
+        description?: string
+        messageId?: string
+        subjectKey?: string
+        anyoneCanWrite?: boolean
+      }
+    ) => invokeChannel<typeof chatMutateContract>(IPC_CHANNELS.CHAT_MUTATE, roomId, mutation),
+    timelineBefore: (roomId: string, beforeSeqno: number, limit?: number) =>
+      invokeChannel<typeof chatTimelineBeforeContract>(IPC_CHANNELS.CHAT_TIMELINE_BEFORE, roomId, beforeSeqno, limit),
     disconnect: () => invokeChannel<typeof chatDisconnectContract>(IPC_CHANNELS.CHAT_DISCONNECT),
+    leave: (roomId: string) => invokeChannel<typeof chatLeaveContract>(IPC_CHANNELS.CHAT_LEAVE, roomId),
     identity: () => invokeChannel<typeof chatIdentityContract>(IPC_CHANNELS.CHAT_IDENTITY),
     linkIdentity: () => invokeChannel<typeof chatLinkIdentityContract>(IPC_CHANNELS.CHAT_IDENTITY_LINK),
     claimDomain: (domain: string) =>

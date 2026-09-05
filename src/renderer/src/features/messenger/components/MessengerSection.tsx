@@ -32,6 +32,8 @@ export const MessengerSection = memo(function MessengerSection({ onIdentityChang
     [onIdentityChange]
   )
 
+  useEffect(() => messengerClient.onIdentityChanged(applyIdentity), [applyIdentity])
+
   useEffect(() => {
     let active = true
     void messengerClient

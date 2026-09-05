@@ -43,9 +43,14 @@ function ChatPage(): React.JSX.Element {
 
   const roomRef = useRef(room)
   roomRef.current = room
+  const activeDmRef = useRef(activeDm)
+  activeDmRef.current = activeDm
   const identityRef = useRef(identity)
   identityRef.current = identity
   const connectedKeyRef = useRef<string | null>(null)
+  const timelineRef = useRef(timeline)
+  timelineRef.current = timeline
+  const pendingTimelineRef = useRef(new Map<string, ChatTimelineItem[]>())
 
   const refreshIdentity = useCallback(() => {
     messengerClient
@@ -58,12 +63,25 @@ function ChatPage(): React.JSX.Element {
     refreshIdentity()
   }, [refreshIdentity])
 
+  useEffect(() => messengerClient.onIdentityChanged(setIdentity), [])
+
+  useEffect(
+    () => () => {
+      connectedKeyRef.current = null
+      messengerClient.disconnect().catch(() => {})
+    },
+    []
+  )
+
   useEffect(() => {
     let cancelled = false
     const key = `${room} ${node}`
-    connectedKeyRef.current = key
+    if (connectedKeyRef.current === key) return
+    connectedKeyRef.current = null
+    pendingTimelineRef.current.clear()
     setTimeline([])
     setHasOlder(true)
+    setLoadingOlder(false)
     setRoomState(null)
     setPresence(null)
     setError(null)
@@ -78,13 +96,16 @@ function ChatPage(): React.JSX.Element {
     messengerClient
       .connect(room, node || undefined)
       .then((res) => {
-        if (!cancelled && connectedKeyRef.current === key) {
+        if (!cancelled) {
+          connectedKeyRef.current = `${res.room} ${node}`
+          roomRef.current = res.room
           setRoomState(res.state)
           setPresence(res.presence)
-          setTimeline(res.timeline.items)
+          setTimeline(mergeTimelineItems(res.timeline.items, pendingTimelineRef.current.get(res.room) ?? []))
+          pendingTimelineRef.current.clear()
           setHasOlder(res.timeline.hasMore)
-          if (res.room !== roomRef.current) {
-            canonicalize(roomRef.current, res.room, res.state.name)
+          if (res.room !== room) {
+            canonicalize(room, res.room, res.state.name)
             setRoom(res.room)
           } else {
             updateName(res.room, res.state.name)
@@ -93,22 +114,24 @@ function ChatPage(): React.JSX.Element {
         }
       })
       .catch((e: unknown) => {
-        if (!cancelled && connectedKeyRef.current === key) {
+        if (!cancelled) {
           setStatus('error')
           setError(e instanceof Error ? e.message : String(e))
         }
       })
     return () => {
       cancelled = true
-      if (connectedKeyRef.current === key) {
-        connectedKeyRef.current = null
-        messengerClient.disconnect().catch(() => {})
-      }
     }
   }, [room, node, canonicalize, updateName])
 
   useEffect(() => {
     const off = messengerClient.onTimeline((item) => {
+      if (connectedKeyRef.current === null) {
+        const buffers = pendingTimelineRef.current
+        if (buffers.size < 16 || buffers.has(item.room)) {
+          buffers.set(item.room, mergeTimelineItems(buffers.get(item.room) ?? [], item))
+        }
+      }
       if (item.room !== roomRef.current) return
       setTimeline((current) => mergeTimelineItems(current, item))
     })
@@ -139,8 +162,10 @@ function ChatPage(): React.JSX.Element {
       } else if (event.status === 'connected') {
         setRoomState(event.state)
         setPresence(event.presence)
-        setTimeline(event.timeline.items)
-        setHasOlder(event.timeline.hasMore)
+        const first = timelineRef.current[0]
+        const incomingFirst = event.timeline.items[0]
+        setTimeline((current) => mergeTimelineItems(current, event.timeline.items, Number.POSITIVE_INFINITY))
+        if (!first || !incomingFirst || first.seqno >= incomingFirst.seqno) setHasOlder(event.timeline.hasMore)
         updateName(event.room, event.state.name)
         setStatus('connected')
         setError(null)
@@ -202,32 +227,43 @@ function ChatPage(): React.JSX.Element {
   const sendDm = useCallback(async () => {
     const text = dmInput.trim()
     const convo = conversations[activeDm]
-    if (!text || !convo) return
+    const targetRoom = roomRef.current
+    if (!text || !convo || status !== 'connected') return
     setDmInput('')
     setDmError(null)
     try {
-      const res = await messengerClient.sendDirectMessage(convo.peerKey, text)
+      const res = await messengerClient.sendDirectMessage(targetRoom, convo.peerKey, text)
       if (res.identity) setIdentity(res.identity)
       if (!res.sent) {
+        if (roomRef.current !== targetRoom || activeDmRef.current !== activeDm) return
         setDmInput(text)
-        if (res.needsLink) setDmError('Link your wallet to send messages.')
+        setDmError('Message was not sent.')
         return
       }
-      appendSelf(activeDm, { id: res.id ?? '', text, ts: res.ts ?? Date.now(), self: true })
+      appendSelf(activeDm, { id: res.id ?? '', text, ts: res.ts ?? Date.now(), self: true, room: targetRoom })
     } catch (e) {
+      if (roomRef.current !== targetRoom || activeDmRef.current !== activeDm) return
       setDmInput(text)
       setDmError(e instanceof Error ? e.message : String(e))
     }
-  }, [dmInput, conversations, activeDm, appendSelf])
+  }, [dmInput, conversations, activeDm, appendSelf, status])
 
   const dmList = useMemo(() => {
     const last = (c: { messages: { ts: number }[] }): number => c.messages[c.messages.length - 1]?.ts ?? 0
     return Object.values(conversations).sort((a, b) => last(b) - last(a))
   }, [conversations])
 
-  const leaveRoom = useCallback(() => {
-    setRoom('')
-    setNode('')
+  const leaveRoom = useCallback(async () => {
+    const targetRoom = roomRef.current
+    try {
+      if (/^[A-Za-z0-9_-]{43}$/.test(targetRoom)) await messengerClient.leave(targetRoom)
+      else await messengerClient.disconnect()
+      if (roomRef.current !== targetRoom) return
+      setRoom('')
+      setNode('')
+    } catch (cause) {
+      if (roomRef.current === targetRoom) setError(cause instanceof Error ? cause.message : String(cause))
+    }
   }, [])
 
   const handleAdd = useCallback(
@@ -239,65 +275,86 @@ function ChatPage(): React.JSX.Element {
   )
 
   const handleRemove = useCallback(
-    (r: string) => {
-      remove(r)
-      if (r === roomRef.current) leaveRoom()
+    async (r: string) => {
+      try {
+        if (/^[A-Za-z0-9_-]{43}$/.test(r)) await messengerClient.leave(r)
+        else if (r === roomRef.current) await messengerClient.disconnect()
+        remove(r)
+        if (r === roomRef.current) {
+          setRoom('')
+          setNode('')
+        }
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : String(cause))
+      }
     },
-    [remove, leaveRoom]
+    [remove]
   )
 
   const send = useCallback(async () => {
+    const targetRoom = roomRef.current
     const text = input.trim()
     if (!text || status !== 'connected') return
     const ownKey = identityRef.current?.identityKey
-    if (roomState?.writePolicy === 'admins' && (!ownKey || !roomState.admins.includes(ownKey))) {
+    if (
+      roomState?.writePolicy === 'admins' &&
+      (!ownKey || (ownKey !== roomState.roomId && !roomState.admins.includes(ownKey)))
+    ) {
       setError('This room is read-only for non-admins.')
       return
     }
     setInput('')
     setError(null)
     try {
-      const res = await messengerClient.send(text)
+      const res = await messengerClient.send(targetRoom, text)
+      if (roomRef.current !== targetRoom) return
       if (res.identity) setIdentity(res.identity)
       if (!res.sent) {
         setInput(text)
-        if (res.needsLink) setError('Link your wallet to send messages.')
+        setError('Message was not sent.')
         return
       }
       setTimeline((current) => mergeTimelineItems(current, res.item))
     } catch (e) {
+      if (roomRef.current !== targetRoom) return
       setInput(text)
       setError(e instanceof Error ? e.message : String(e))
     }
   }, [input, status, roomState])
 
-  const mutateRoom = useCallback(async (mutation: Parameters<typeof messengerClient.mutate>[0]) => {
+  const mutateRoom = useCallback(async (mutation: Parameters<typeof messengerClient.mutate>[1]) => {
+    const targetRoom = roomRef.current
     setError(null)
     try {
-      const result = await messengerClient.mutate(mutation)
+      const result = await messengerClient.mutate(targetRoom, mutation)
+      if (roomRef.current !== targetRoom) return
       setTimeline((current) => mergeTimelineItems(current, result.item))
     } catch (cause) {
+      if (roomRef.current !== targetRoom) return
       setError(cause instanceof Error ? cause.message : String(cause))
     }
   }, [])
 
   const loadOlder = useCallback(async () => {
+    const targetRoom = roomRef.current
     const first = timeline[0]
     if (!first || loadingOlder || !hasOlder) return
     setLoadingOlder(true)
     try {
-      const page = await messengerClient.timelineBefore(first.seqno, 100)
+      const page = await messengerClient.timelineBefore(targetRoom, first.seqno, 100)
+      if (roomRef.current !== targetRoom) return
       setHasOlder(page.hasMore)
       setTimeline((current) => mergeTimelineItems(current, page.items, Number.POSITIVE_INFINITY))
     } catch (cause) {
+      if (roomRef.current !== targetRoom) return
       setError(cause instanceof Error ? cause.message : String(cause))
     } finally {
-      setLoadingOlder(false)
+      if (roomRef.current === targetRoom) setLoadingOlder(false)
     }
   }, [timeline, loadingOlder, hasOlder])
 
   const ownKey = identity?.identityKey
-  const canAdmin = Boolean(ownKey && roomState?.admins.includes(ownKey))
+  const canAdmin = Boolean(ownKey && (ownKey === roomState?.roomId || roomState?.admins.includes(ownKey)))
   const canModerate = Boolean(canAdmin || (ownKey && roomState?.moderators.includes(ownKey)))
   const canWrite = Boolean(roomState?.writePolicy !== 'admins' || canAdmin)
   const followedRoom = rooms.find((entry) => entry.room === room)

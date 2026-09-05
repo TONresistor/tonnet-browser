@@ -7,7 +7,8 @@ export interface FollowedRoom {
   alias?: string
 }
 
-const KEY = 'groupchat.rooms'
+const KEY = 'messenger.rooms.v1'
+const LEGACY_KEY = 'groupchat.rooms'
 
 function validReference(value: string): boolean {
   const normalized = value.trim()
@@ -15,7 +16,7 @@ function validReference(value: string): boolean {
 }
 
 function readStored(): FollowedRoom[] | null {
-  const raw = localStorage.getItem(KEY)
+  const raw = localStorage.getItem(KEY) ?? localStorage.getItem(LEGACY_KEY)
   if (!raw) return null
   try {
     const parsed = JSON.parse(raw) as unknown
@@ -37,7 +38,10 @@ function readStored(): FollowedRoom[] | null {
 
 function load(): FollowedRoom[] {
   const stored = readStored()
-  if (stored) return stored
+  if (stored) {
+    if (localStorage.getItem(KEY) === null) persist(stored)
+    return stored
+  }
   return []
 }
 

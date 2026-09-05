@@ -22,3 +22,16 @@ Legacy `tonnet:*` rooms and wallet-linked identities are not migrated into the
 0.4 protocol. Direct messages require both identities online; there is no
 offline mailbox. Legacy local files are retained without being used by the
 new client.
+
+Closing the Messenger view only deactivates its selection: joined rooms and
+verified history remain in `messenger/`. Leaving or removing a room explicitly
+invokes the client's leave operation and deletes that room's cached membership.
+Compatible favorites are copied from `groupchat.rooms` to `messenger.rooms.v1`;
+the legacy key is not overwritten.
+
+The Browser validates the private stdio protocol and bounds each UTF-8 frame to
+64 KiB. Room operations carry an explicit canonical room key; stale joins and
+history refreshes cannot replace another selected room. The adapter converts
+Unix seconds to renderer milliseconds and preserves direct-message direction,
+deduplicating send replies and notifications. Unexpected helper exits trigger
+up to three restart attempts while a room is active or autostart is enabled.

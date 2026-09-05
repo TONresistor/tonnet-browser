@@ -1,10 +1,14 @@
 export const messengerClient = {
   connect: (room?: string, node?: string) => window.electron.chat.connect(room, node),
   disconnect: () => window.electron.chat.disconnect(),
-  send: (text: string) => window.electron.chat.send(text),
-  sendDirectMessage: (peerKey: string, text: string) => window.electron.chat.dmSend(peerKey, text),
-  mutate: (mutation: Parameters<typeof window.electron.chat.mutate>[0]) => window.electron.chat.mutate(mutation),
-  timelineBefore: (beforeSeqno: number, limit = 100) => window.electron.chat.timelineBefore(beforeSeqno, limit),
+  leave: (roomId: string) => window.electron.chat.leave(roomId),
+  send: (roomId: string, text: string) => window.electron.chat.send(roomId, text),
+  sendDirectMessage: (roomId: string, peerKey: string, text: string) =>
+    window.electron.chat.dmSend(roomId, peerKey, text),
+  mutate: (roomId: string, mutation: Parameters<typeof window.electron.chat.mutate>[1]) =>
+    window.electron.chat.mutate(roomId, mutation),
+  timelineBefore: (roomId: string, beforeSeqno: number, limit = 100) =>
+    window.electron.chat.timelineBefore(roomId, beforeSeqno, limit),
   getIdentity: () => window.electron.chat.identity(),
   linkIdentity: () => window.electron.chat.linkIdentity(),
   detectDomains: () => window.electron.chat.detectDomains(),
@@ -21,4 +25,6 @@ export const messengerClient = {
     window.electron.on('chat:room-state', listener),
   onRoomPresence: (listener: Parameters<typeof window.electron.on<'chat:room-presence'>>[1]) =>
     window.electron.on('chat:room-presence', listener),
+  onIdentityChanged: (listener: Parameters<typeof window.electron.on<'chat:identity-changed'>>[1]) =>
+    window.electron.on('chat:identity-changed', listener),
 }

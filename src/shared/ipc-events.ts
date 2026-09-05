@@ -60,11 +60,13 @@ export interface IpcEventMap {
       text: string
       ts: number
       identity: import('./types').ChatIdentityInfo
+      direction: 'sent' | 'received'
     },
   ]
   'chat:connection': [event: import('./ipc-contract/chat').ChatConnectionEvent]
   'chat:room-state': [state: import('./ipc-contract/chat').ChatRoomState]
   'chat:room-presence': [presence: import('./ipc-contract/chat').ChatRoomPresence]
+  'chat:identity-changed': [identity: import('./types').OwnChatIdentity]
   'cocoon:state-changed': [state: CocoonState]
   'cocoon:log': [event: CocoonLogEvent]
   'cocoon:withdraw:event': [event: WithdrawDriverEvent]

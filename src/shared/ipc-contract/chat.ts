@@ -37,6 +37,9 @@ const ChatPublicErrorCodes = [
   'CHAT_ROLE_CONFLICT',
   'CHAT_LIMIT_EXCEEDED',
   'CHAT_OPERATION_FAILED',
+  'CHAT_DISCONNECTED',
+  'CHAT_INVALID_ARGUMENT',
+  'CHAT_INVALID_IDENTITY_DOMAIN',
 ] as const
 const EventIdSchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/)
 const MessageIdSchema = z.string().regex(/^[1-9]\d*$/)
@@ -182,7 +185,7 @@ export const chatConnectContract = defineRequest({
 export const chatSendContract = defineRequest({
   ...mainBase,
   channel: CHAT_CHANNELS.send,
-  input: z.tuple([z.string().max(16_384)]),
+  input: z.tuple([IdentityKeySchema, z.string().max(16_384)]),
   output: publicSendResult,
   errors: ['CHAT_DISCONNECTED', 'SEND_FAILED', ...ChatPublicErrorCodes],
   redaction: 'secret',
@@ -190,7 +193,7 @@ export const chatSendContract = defineRequest({
 export const chatDmSendContract = defineRequest({
   ...mainBase,
   channel: CHAT_CHANNELS.dmSend,
-  input: z.tuple([IdentityKeySchema, z.string().max(16_384)]),
+  input: z.tuple([IdentityKeySchema, IdentityKeySchema, z.string().max(16_384)]),
   output: sendResult.extend({ id: z.string().optional(), ts: z.number().finite().optional() }),
   errors: ['CHAT_DISCONNECTED', 'INVALID_RECIPIENT', 'SEND_FAILED', ...ChatPublicErrorCodes],
   redaction: 'secret',
@@ -199,6 +202,7 @@ export const chatMutateContract = defineRequest({
   ...mainBase,
   channel: CHAT_CHANNELS.mutate,
   input: z.tuple([
+    IdentityKeySchema,
     z.object({
       action: z.enum(['metadata', 'pin', 'unpin', 'moderator-grant', 'moderator-revoke', 'write-policy']),
       name: z.string().max(64).optional(),
@@ -221,13 +225,20 @@ export const chatDisconnectContract = defineRequest({
   output: z.object({ disconnected: z.literal(true) }),
   errors: ['DISCONNECT_FAILED'],
 })
+export const chatLeaveContract = defineRequest({
+  ...mainBase,
+  channel: CHAT_CHANNELS.leave,
+  input: z.tuple([IdentityKeySchema]),
+  output: z.object({ left: z.literal(true) }),
+  errors: ['DISCONNECT_FAILED', ...ChatPublicErrorCodes],
+})
 const identityRequest = <const TChannel extends string>(channel: TChannel) =>
   defineRequest({
     ...mainBase,
     channel,
     input: z.tuple([]),
     output: OwnChatIdentitySchema,
-    errors: ['IDENTITY_FAILED'],
+    errors: ['IDENTITY_FAILED', ...ChatPublicErrorCodes],
   })
 export const chatIdentityContract = identityRequest(CHAT_CHANNELS.identity)
 export const chatLinkIdentityContract = identityRequest(CHAT_CHANNELS.linkIdentity)
@@ -251,7 +262,7 @@ export const chatDetectDomainsContract = defineRequest({
 export const chatTimelineBeforeContract = defineRequest({
   ...mainBase,
   channel: CHAT_CHANNELS.timelineBefore,
-  input: z.tuple([z.number().int().positive(), z.number().int().min(1).max(256).optional()]),
+  input: z.tuple([IdentityKeySchema, z.number().int().positive(), z.number().int().min(1).max(256).optional()]),
   output: ChatTimelinePageSchema,
   errors: ['CHAT_DISCONNECTED', 'HISTORY_FAILED', ...ChatPublicErrorCodes],
 })
@@ -262,6 +273,7 @@ export const ChatDmMessageSchema = z.object({
   text: z.string().max(4_000),
   ts: z.number().finite(),
   identity: ChatIdentityInfoSchema,
+  direction: z.enum(['sent', 'received']),
 })
 export const chatTimelineContract = defineEvent({
   channel: CHAT_CHANNELS.timeline,
@@ -301,6 +313,14 @@ export const chatRoomPresenceContract = defineEvent({
   redaction: 'public',
 })
 
+export const chatIdentityChangedContract = defineEvent({
+  channel: CHAT_CHANNELS.identityChanged,
+  direction: 'event',
+  recipient: 'main-renderer',
+  payload: z.tuple([OwnChatIdentitySchema]),
+  redaction: 'sensitive',
+})
+
 export const CHAT_REQUEST_CONTRACTS = [
   chatConnectContract,
   chatSendContract,
@@ -308,6 +328,7 @@ export const CHAT_REQUEST_CONTRACTS = [
   chatMutateContract,
   chatTimelineBeforeContract,
   chatDisconnectContract,
+  chatLeaveContract,
   chatIdentityContract,
   chatLinkIdentityContract,
   chatClaimDomainContract,
@@ -321,4 +342,5 @@ export const CHAT_EVENT_CONTRACTS = [
   chatConnectionContract,
   chatRoomStateContract,
   chatRoomPresenceContract,
+  chatIdentityChangedContract,
 ] as const
