@@ -8,7 +8,7 @@ import { useFollowedRooms } from '../useFollowedRooms'
 describe('Messenger local state', () => {
   let root: Root
   let container: HTMLDivElement
-  let direct: ReturnType<typeof useDmConversations>
+  let direct: ReturnType<typeof useDmConversations.getState>
   let rooms: ReturnType<typeof useFollowedRooms>
   const room = 'Q'.repeat(43)
   const peer = 'B'.repeat(43)
@@ -22,6 +22,7 @@ describe('Messenger local state', () => {
   }
 
   beforeEach(() => {
+    useDmConversations.setState({ conversations: {}, identityKey: null })
     localStorage.clear()
     container = document.createElement('div')
     document.body.append(container)

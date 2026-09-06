@@ -140,11 +140,13 @@ export const ChatConnectionEventSchema = z.discriminatedUnion('status', [
   z.object({
     room: z.string().min(1),
     status: z.literal('reconnecting'),
+    reference: z.string().min(1).optional(),
     attempt: z.number().int().positive().optional(),
   }),
   z.object({
     room: z.string().min(1),
     status: z.literal('connected'),
+    reference: z.string().min(1).optional(),
     state: ChatRoomStateSchema,
     connection: ChatRoomConnectionSchema,
     presence: ChatRoomPresenceSchema,
@@ -153,6 +155,7 @@ export const ChatConnectionEventSchema = z.discriminatedUnion('status', [
   z.object({
     room: z.string().min(1),
     status: z.literal('error'),
+    reference: z.string().min(1).optional(),
     code: z.string().min(1),
     message: z.string().min(1),
     retryable: z.boolean(),

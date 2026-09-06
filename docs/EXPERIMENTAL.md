@@ -29,6 +29,12 @@ invokes the client's leave operation and deletes that room's cached membership.
 Compatible favorites are copied from `groupchat.rooms` to `messenger.rooms.v1`;
 the legacy key is not overwritten.
 
+Direct-message reception belongs to the Browser session, including when another
+tab is active or the Messenger view has not been opened. Conversations remain in
+renderer memory across navigation and helper reconnects. They are cleared when
+the client identity changes or the renderer restarts; no DM archive is written
+to disk. Listening for messages does not start a disabled client.
+
 The Browser validates the private stdio protocol and bounds each UTF-8 frame to
 64 KiB. Room operations carry an explicit canonical room key; stale joins and
 history refreshes cannot replace another selected room. The adapter converts

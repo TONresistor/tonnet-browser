@@ -21,10 +21,11 @@ import { messengerClient } from '@/features/messenger/client'
 function ChatPage(): React.JSX.Element {
   const { rooms, add, remove, canonicalize, updateName } = useFollowedRooms()
   const { previews, update: updatePreview } = useRoomPreviews()
-  const { conversations, receive: receiveDm, appendSelf, open: openDm, remove: removeDm } = useDmConversations()
+  const { conversations, appendSelf, open: openDm, remove: removeDm } = useDmConversations()
 
   const [room, setRoom] = useState<string>('')
   const [node, setNode] = useState<string>('')
+  const [joinAttempt, setJoinAttempt] = useState(0)
 
   const [timeline, setTimeline] = useState<ChatTimelineItem[]>([])
   const [hasOlder, setHasOlder] = useState(true)
@@ -122,7 +123,7 @@ function ChatPage(): React.JSX.Element {
     return () => {
       cancelled = true
     }
-  }, [room, node, canonicalize, updateName])
+  }, [room, node, joinAttempt, canonicalize, updateName])
 
   useEffect(() => {
     const off = messengerClient.onTimeline((item) => {
@@ -133,7 +134,7 @@ function ChatPage(): React.JSX.Element {
         }
       }
       if (item.room !== roomRef.current) return
-      setTimeline((current) => mergeTimelineItems(current, item))
+      setTimeline((current) => mergeTimelineItems(current, item, Number.POSITIVE_INFINITY))
     })
     return () => off()
   }, [])
@@ -146,20 +147,19 @@ function ChatPage(): React.JSX.Element {
   }, [room, timeline, timelineLabels, updatePreview])
 
   useEffect(() => {
-    const off = messengerClient.onDirectMessage((m) => {
-      receiveDm(m)
-    })
-    return () => off()
-  }, [receiveDm])
-
-  useEffect(() => {
     const off = messengerClient.onConnection((event) => {
-      if (event.room !== roomRef.current) return
+      if (event.room !== roomRef.current && event.reference !== roomRef.current) return
       if (event.status === 'reconnecting') {
         setStatus('reconnecting')
         setPresence(null)
         setError(null)
       } else if (event.status === 'connected') {
+        connectedKeyRef.current = `${event.room} ${node}`
+        if (event.room !== roomRef.current) {
+          canonicalize(roomRef.current, event.room, event.state.name)
+          roomRef.current = event.room
+          setRoom(event.room)
+        }
         setRoomState(event.state)
         setPresence(event.presence)
         const first = timelineRef.current[0]
@@ -176,7 +176,7 @@ function ChatPage(): React.JSX.Element {
       }
     })
     return () => off()
-  }, [updateName])
+  }, [node, canonicalize, updateName])
 
   useEffect(() => {
     const off = messengerClient.onRoomPresence((next) => {
@@ -195,11 +195,18 @@ function ChatPage(): React.JSX.Element {
     return () => off()
   }, [updateName])
 
-  const openRoom = useCallback((r: FollowedRoom) => {
-    setRoom(r.room)
-    setNode(r.node || '')
-    setActiveDm('')
-  }, [])
+  const openRoom = useCallback(
+    (r: FollowedRoom) => {
+      if (r.room === room && (r.node || '') === node && status === 'error') {
+        connectedKeyRef.current = null
+        setJoinAttempt((attempt) => attempt + 1)
+      }
+      setRoom(r.room)
+      setNode(r.node || '')
+      setActiveDm('')
+    },
+    [room, node, status]
+  )
 
   const handleOpenDm = useCallback(
     (message: ChatTimelineMessage) => {
@@ -314,7 +321,7 @@ function ChatPage(): React.JSX.Element {
         setError('Message was not sent.')
         return
       }
-      setTimeline((current) => mergeTimelineItems(current, res.item))
+      setTimeline((current) => mergeTimelineItems(current, res.item, Number.POSITIVE_INFINITY))
     } catch (e) {
       if (roomRef.current !== targetRoom) return
       setInput(text)
@@ -328,7 +335,7 @@ function ChatPage(): React.JSX.Element {
     try {
       const result = await messengerClient.mutate(targetRoom, mutation)
       if (roomRef.current !== targetRoom) return
-      setTimeline((current) => mergeTimelineItems(current, result.item))
+      setTimeline((current) => mergeTimelineItems(current, result.item, Number.POSITIVE_INFINITY))
     } catch (cause) {
       if (roomRef.current !== targetRoom) return
       setError(cause instanceof Error ? cause.message : String(cause))

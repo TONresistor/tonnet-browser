@@ -237,7 +237,42 @@ describe('standalone Messenger IPC', () => {
       expect.objectContaining({ room: ROOM, status: 'error' })
     )
     manager.emit('client.reconnecting', 1)
-    expect(mocks.emit).toHaveBeenLastCalledWith(expect.anything(), { room: ROOM, status: 'reconnecting', attempt: 1 })
+    expect(mocks.emit).toHaveBeenLastCalledWith(expect.anything(), {
+      room: ROOM,
+      reference: ROOM,
+      status: 'reconnecting',
+      attempt: 1,
+    })
+  })
+
+  it('retains the requested alias through a failed join and canonical recovery', async () => {
+    await invoke('chat:identity')
+    manager.request
+      .mockResolvedValueOnce({ room: ROOM })
+      .mockRejectedValueOnce(new MessengerRpcError('Temporary node failure', 'ROOM_UNAVAILABLE', -32000))
+    await expect(invoke('chat:connect', 'community.ton')).rejects.toMatchObject({ code: 'CHAT_NODE_UNREACHABLE' })
+    manager.emit('room.connection', { room: ROOM, status: 'reconnecting', attempt: 1 })
+    expect(mocks.emit).toHaveBeenLastCalledWith(expect.anything(), {
+      room: ROOM,
+      reference: 'community.ton',
+      status: 'reconnecting',
+      attempt: 1,
+    })
+    manager.emit('room.connection', { ...JOIN, status: 'connected' })
+    await vi.waitFor(() =>
+      expect(mocks.emit).toHaveBeenLastCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          room: ROOM,
+          reference: 'community.ton',
+          status: 'connected',
+        })
+      )
+    )
+    await invoke('chat:disconnect')
+    mocks.emit.mockClear()
+    manager.emit('room.connection', { ...JOIN, status: 'connected' })
+    expect(mocks.emit).not.toHaveBeenCalled()
   })
 
   it('ignores a history refresh completed after another room is selected', async () => {

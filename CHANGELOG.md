@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Direct-message reception and conversation retention while navigating outside Messenger, alias recovery after a failed join, and retention of loaded history when new events arrive.
 - Messenger timestamps, outgoing direct-message direction and duplicate send acknowledgements.
 - Stale room joins and history refreshes, helper crash recovery, bounded protocol frames and declared IPC errors.
 - Closing Messenger preserves joined-room caches; only an explicit leave removes membership.

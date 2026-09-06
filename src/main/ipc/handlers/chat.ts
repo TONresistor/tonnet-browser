@@ -202,6 +202,7 @@ export function registerChatHandlers(registry: ServiceRegistry): void {
   const manager = registry.messengerClientManager
   let activeRoom: string | null = null
   let wantedRoom: string | null = null
+  let wantedReference: string | null = null
   let identity: OwnChatIdentity | null = null
   let generation = 0
   let refreshGeneration = 0
@@ -290,6 +291,7 @@ export function registerChatHandlers(registry: ServiceRegistry): void {
         emitContractToRenderer(chatConnectionContract, {
           room,
           status: 'reconnecting',
+          reference: wantedReference ?? undefined,
           attempt: Number(raw.attempt ?? 1),
         })
       } else if (status === 'error') {
@@ -298,6 +300,7 @@ export function registerChatHandlers(registry: ServiceRegistry): void {
           room,
           status: 'error',
           code: 'ROOM_UNAVAILABLE',
+          reference: wantedReference ?? undefined,
           message: String(raw.message ?? 'Room unavailable'),
           retryable: Boolean(raw.retryable ?? true),
         })
@@ -313,6 +316,7 @@ export function registerChatHandlers(registry: ServiceRegistry): void {
             emitContractToRenderer(chatConnectionContract, {
               room,
               status: 'connected',
+              reference: wantedReference ?? undefined,
               state: roomState(raw.state),
               connection: roomConnection(raw.connection),
               presence: roomPresence(raw.presence),
@@ -330,6 +334,7 @@ export function registerChatHandlers(registry: ServiceRegistry): void {
               status: 'error',
               code: 'CHAT_OPERATION_FAILED',
               message: 'Unable to refresh room history',
+              reference: wantedReference ?? undefined,
               retryable: true,
             })
           })
@@ -347,6 +352,7 @@ export function registerChatHandlers(registry: ServiceRegistry): void {
           status: 'error',
           code: 'CHAT_NODE_UNREACHABLE',
           message: 'Messenger client disconnected',
+          reference: wantedReference ?? undefined,
           retryable: true,
         })
     })
@@ -354,7 +360,12 @@ export function registerChatHandlers(registry: ServiceRegistry): void {
   registry.lifecycleRegistrations.add(
     onEmitter(manager, 'client.reconnecting', (attempt: number) => {
       if (wantedRoom)
-        emitContractToRenderer(chatConnectionContract, { room: wantedRoom, status: 'reconnecting', attempt })
+        emitContractToRenderer(chatConnectionContract, {
+          room: wantedRoom,
+          reference: wantedReference ?? undefined,
+          status: 'reconnecting',
+          attempt,
+        })
     })
   )
 
@@ -364,6 +375,7 @@ export function registerChatHandlers(registry: ServiceRegistry): void {
     const currentGeneration = ++generation
     activeRoom = null
     wantedRoom = null
+    wantedReference = null
     manager.setActive(true)
     try {
       identity ??= await getIdentity()
@@ -374,6 +386,7 @@ export function registerChatHandlers(registry: ServiceRegistry): void {
         : (await request('room.resolve', z.object({ room: rpcRoomKeySchema }), { reference })).room
       if (generation !== currentGeneration) ipcFailure('CHAT_DISCONNECTED', 'Room selection changed')
       wantedRoom = roomId
+      wantedReference = reference
       const joined = await request(
         'room.join',
         rpcJoinSchema.refine((joined) => joined.room === roomId),
@@ -542,6 +555,7 @@ export function registerChatHandlers(registry: ServiceRegistry): void {
     generation++
     activeRoom = null
     wantedRoom = null
+    wantedReference = null
     manager.setActive(false)
     return { disconnected: true as const }
   })
@@ -550,6 +564,7 @@ export function registerChatHandlers(registry: ServiceRegistry): void {
       generation++
       activeRoom = null
       wantedRoom = null
+      wantedReference = null
       manager.setActive(false)
     }
     try {
