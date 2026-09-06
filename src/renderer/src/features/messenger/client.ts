@@ -7,12 +7,17 @@ export const messengerClient = {
     window.electron.chat.dmSend(roomId, peerKey, text),
   mutate: (roomId: string, mutation: Parameters<typeof window.electron.chat.mutate>[1]) =>
     window.electron.chat.mutate(roomId, mutation),
+  getPending: (roomId: string) => window.electron.chat.pending(roomId),
+  retryPending: (roomId: string, eventId: string) => window.electron.chat.retryPending(roomId, eventId),
+  discardPending: (roomId: string, eventId: string) => window.electron.chat.discardPending(roomId, eventId),
   timelineBefore: (roomId: string, beforeSeqno: number, limit = 100) =>
     window.electron.chat.timelineBefore(roomId, beforeSeqno, limit),
   getIdentity: () => window.electron.chat.identity(),
   linkIdentity: () => window.electron.chat.linkIdentity(),
   detectDomains: () => window.electron.chat.detectDomains(),
   claimDomain: (domain: string) => window.electron.chat.claimDomain(domain),
+  prepareDomainLink: (domain: string) => window.electron.chat.prepareDomainLink(domain),
+  openDomainLink: (txUrl: string) => window.electron.chat.openDomainLink(txUrl),
   clearDomain: () => window.electron.chat.clearDomain(),
   resetIdentity: () => window.electron.chat.resetIdentity(),
   onTimeline: (listener: Parameters<typeof window.electron.on<'chat:timeline'>>[1]) =>

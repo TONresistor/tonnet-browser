@@ -1,8 +1,9 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
-import { LogOut, Pin, PinOff, Search, Settings2, X } from 'lucide-react'
-import type { ChatRoomState } from '@shared/ipc-contract/chat'
+import { AlertTriangle, LogOut, Pin, PinOff, RotateCcw, Search, Settings2, Trash2, X } from 'lucide-react'
+import type { ChatPendingOperation, ChatRoomState } from '@shared/ipc-contract/chat'
 import { cn } from '@/lib/utils'
 import { EmptyState } from '@/components/ui/ios/EmptyState'
+import { useConfirmAction } from '@/hooks/useConfirmAction'
 import { ChatsIcon } from './ChatsIcon'
 import { SendIcon } from './SendIcon'
 import { IdentityBadge, displayName } from './IdentityBadge'
@@ -30,10 +31,14 @@ interface ChatRoomViewProps {
   loadingOlder: boolean
   status: ChatStatus
   error: string | null
+  pending: ChatPendingOperation | null
+  pendingBusy: boolean
   timeline: ChatTimelineItem[]
   input: string
   onInput: (v: string) => void
   onSend: () => void
+  onRetryPending: () => void
+  onDiscardPending: () => void
   onLeave: () => void
   onOpenDm: (message: ChatTimelineMessage) => void
   onMutate: (mutation: RoomMutation) => Promise<void>
@@ -66,10 +71,14 @@ function ChatRoomView({
   loadingOlder,
   status,
   error,
+  pending,
+  pendingBusy,
   timeline,
   input,
   onInput,
   onSend,
+  onRetryPending,
+  onDiscardPending,
   onLeave,
   onOpenDm,
   onMutate,
@@ -83,6 +92,7 @@ function ChatRoomView({
   const [metadataDescription, setMetadataDescription] = useState('')
   const [moderatorKey, setModeratorKey] = useState('')
   const [pinnedRequest, setPinnedRequest] = useState<{ messageId: string; nonce: number } | null>(null)
+  const { reset: resetDiscardConfirm, trigger: triggerDiscardConfirm, isArmed: isDiscardArmed } = useConfirmAction()
   const pinnedRequestNonceRef = useRef(0)
   const pinnedLoadCursorRef = useRef<number | null>(null)
 
@@ -93,6 +103,8 @@ function ChatRoomView({
     pinnedRequestNonceRef.current = 0
     pinnedLoadCursorRef.current = null
   }, [room])
+
+  useEffect(() => resetDiscardConfirm(), [pending?.eventId, resetDiscardConfirm])
 
   useEffect(() => {
     setMetadataName(roomState?.name ?? '')
@@ -225,9 +237,10 @@ function ChatRoomView({
           <button
             type="button"
             onClick={onLeave}
+            disabled={pending !== null || pendingBusy}
             aria-label="Leave room"
-            title="Leave room"
-            className="flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-surface hover:text-foreground"
+            title={pending ? 'Resolve the pending operation before leaving' : 'Leave room'}
+            className="flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-surface hover:text-foreground disabled:opacity-40"
           >
             <LogOut className="h-[18px] w-[18px]" />
           </button>
@@ -253,19 +266,21 @@ function ChatRoomView({
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
+              disabled={pending !== null || pendingBusy}
               onClick={() =>
                 void onMutate({ action: 'metadata', name: metadataName, description: metadataDescription })
               }
-              className="rounded-full bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground"
+              className="rounded-full bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground disabled:opacity-40"
             >
               Save metadata
             </button>
             <button
               type="button"
+              disabled={pending !== null || pendingBusy}
               onClick={() =>
                 void onMutate({ action: 'write-policy', anyoneCanWrite: roomState.writePolicy !== 'everyone' })
               }
-              className="rounded-full border border-border-subtle px-3 py-1.5 text-xs"
+              className="rounded-full border border-border-subtle px-3 py-1.5 text-xs disabled:opacity-40"
             >
               {roomState.writePolicy === 'everyone' ? 'Make admins-only' : 'Let everyone post'}
             </button>
@@ -284,7 +299,7 @@ function ChatRoomView({
               <button
                 key={action}
                 type="button"
-                disabled={!/^[A-Za-z0-9_-]{43}$/.test(moderatorKey)}
+                disabled={pending !== null || pendingBusy || !/^[A-Za-z0-9_-]{43}$/.test(moderatorKey)}
                 onClick={() => void onMutate({ action, subjectKey: moderatorKey })}
                 className="rounded-full border border-border-subtle px-3 py-1.5 text-xs disabled:opacity-40"
               >
@@ -323,6 +338,43 @@ function ChatRoomView({
       {error && (
         <div className="mx-3 mt-2 rounded-card border border-destructive/20 bg-destructive/10 px-4 py-2 text-sm text-destructive">
           {error}
+        </div>
+      )}
+
+      {pending && (
+        <div className="mx-3 mt-2 flex items-start gap-3 rounded-card border border-warning/30 bg-warning/10 px-4 py-3 text-sm">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+          <div className="min-w-0 flex-1">
+            <div className="font-medium text-foreground">
+              {pending.status === 'committed' ? 'Operation confirmed' : 'Delivery result unknown'}
+            </div>
+            <div className="mt-0.5 whitespace-pre-wrap break-words text-muted-foreground">{pending.summary}</div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <button
+                type="button"
+                disabled={!connected || pendingBusy}
+                onClick={onRetryPending}
+                className="inline-flex items-center gap-1.5 rounded-full border border-border-subtle px-3 py-1 text-xs font-medium disabled:opacity-40"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                {pending.status === 'committed' ? 'Apply result' : 'Retry exact operation'}
+              </button>
+              <button
+                type="button"
+                disabled={pendingBusy}
+                onClick={() => {
+                  if (triggerDiscardConfirm(pending.eventId)) onDiscardPending()
+                }}
+                className="inline-flex items-center gap-1.5 rounded-full border border-destructive/30 px-3 py-1 text-xs font-medium text-destructive disabled:opacity-40"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                {isDiscardArmed(pending.eventId) ? 'Confirm discard' : 'Discard tracking'}
+              </button>
+            </div>
+            {isDiscardArmed(pending.eventId) && (
+              <div className="mt-1.5 text-xs text-destructive">This does not cancel a possible commit.</div>
+            )}
+          </div>
         </div>
       )}
 
@@ -392,6 +444,7 @@ function ChatRoomView({
                 {canModerate && (
                   <button
                     type="button"
+                    disabled={pending !== null || pendingBusy}
                     onClick={() =>
                       void onMutate({
                         action: pinned.has(message.messageId) ? 'unpin' : 'pin',
@@ -399,7 +452,7 @@ function ChatRoomView({
                       })
                     }
                     aria-label={pinned.has(message.messageId) ? 'Unpin message' : 'Pin message'}
-                    className="rounded-full p-0.5 hover:text-foreground"
+                    className="rounded-full p-0.5 hover:text-foreground disabled:opacity-40"
                   >
                     {pinned.has(message.messageId) ? <PinOff className="h-3 w-3" /> : <Pin className="h-3 w-3" />}
                   </button>
@@ -428,7 +481,7 @@ function ChatRoomView({
         <button
           type="button"
           onClick={onSend}
-          disabled={!connected || !canWrite || !input.trim()}
+          disabled={!connected || !canWrite || !input.trim() || pending !== null || pendingBusy}
           aria-label="Send"
           className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary text-identity-foreground transition-opacity hover:bg-primary/90 disabled:opacity-40"
         >

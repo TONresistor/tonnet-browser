@@ -31,6 +31,8 @@ const ChatPublicErrorCodes = [
   'CHAT_SEQUENCER_UNAVAILABLE',
   'CHAT_NODE_UNREACHABLE',
   'CHAT_TIMEOUT',
+  'CHAT_SEND_UNCERTAIN',
+  'CHAT_PENDING_OPERATION',
   'CHAT_CLOCK_SKEW',
   'CHAT_PROTOCOL_INVALID',
   'CHAT_UNKNOWN_MESSAGE',
@@ -94,6 +96,27 @@ export const ChatTimelinePageSchema = z.object({
   hasMore: z.boolean(),
 })
 export type ChatTimelinePage = z.infer<typeof ChatTimelinePageSchema>
+
+export const ChatPendingOperationSchema = z.object({
+  room: IdentityKeySchema,
+  eventId: EventIdSchema,
+  status: z.enum(['uncertain', 'committed']),
+  ts: z.number().finite(),
+  kind: z.enum([
+    'message',
+    'pin',
+    'unpin',
+    'metadata',
+    'write-policy',
+    'admin-grant',
+    'admin-revoke',
+    'moderator-grant',
+    'moderator-revoke',
+  ]),
+  summary: z.string().max(4096),
+  text: z.string().max(2048).optional(),
+})
+export type ChatPendingOperation = z.infer<typeof ChatPendingOperationSchema>
 const sendResult = z.object({
   sent: z.boolean(),
   needsLink: z.boolean().optional(),
@@ -151,6 +174,7 @@ export const ChatConnectionEventSchema = z.discriminatedUnion('status', [
     connection: ChatRoomConnectionSchema,
     presence: ChatRoomPresenceSchema,
     timeline: ChatTimelinePageSchema,
+    pending: ChatPendingOperationSchema.nullable(),
   }),
   z.object({
     room: z.string().min(1),
@@ -175,6 +199,7 @@ export const chatConnectContract = defineRequest({
     connection: ChatRoomConnectionSchema,
     presence: ChatRoomPresenceSchema,
     timeline: ChatTimelinePageSchema,
+    pending: ChatPendingOperationSchema.nullable(),
   }),
   errors: [
     'INVALID_ROOM',
@@ -221,6 +246,27 @@ export const chatMutateContract = defineRequest({
   output: z.object({ committed: z.literal(true), item: ChatTimelineSystemSchema }),
   errors: ['CHAT_DISCONNECTED', 'INVALID_MUTATION', 'MUTATION_REJECTED', ...ChatPublicErrorCodes],
 })
+export const chatPendingContract = defineRequest({
+  ...mainBase,
+  channel: CHAT_CHANNELS.pending,
+  input: z.tuple([IdentityKeySchema]),
+  output: z.object({ pending: ChatPendingOperationSchema.nullable() }),
+  errors: ['CHAT_DISCONNECTED', ...ChatPublicErrorCodes],
+})
+export const chatRetryPendingContract = defineRequest({
+  ...mainBase,
+  channel: CHAT_CHANNELS.retryPending,
+  input: z.tuple([IdentityKeySchema, EventIdSchema]),
+  output: z.object({ item: ChatTimelineItemSchema }),
+  errors: ['CHAT_DISCONNECTED', ...ChatPublicErrorCodes],
+})
+export const chatDiscardPendingContract = defineRequest({
+  ...mainBase,
+  channel: CHAT_CHANNELS.discardPending,
+  input: z.tuple([IdentityKeySchema, EventIdSchema]),
+  output: z.object({ discarded: z.literal(true) }),
+  errors: ['CHAT_DISCONNECTED', ...ChatPublicErrorCodes],
+})
 export const chatDisconnectContract = defineRequest({
   ...mainBase,
   channel: CHAT_CHANNELS.disconnect,
@@ -252,7 +298,33 @@ export const chatClaimDomainContract = defineRequest({
   channel: CHAT_CHANNELS.claimDomain,
   input: z.tuple([z.string().min(1).max(253)]),
   output: z.object({ ok: z.boolean(), reason: z.string().optional(), identity: OwnChatIdentitySchema }),
-  errors: ['INVALID_DOMAIN', 'DOMAIN_CLAIM_FAILED'],
+  errors: ['INVALID_DOMAIN', 'DOMAIN_CLAIM_FAILED', ...ChatPublicErrorCodes],
+})
+export const DomainTransactionUrlSchema = z
+  .string()
+  .max(4096)
+  .regex(/^ton:\/\/transfer\/[A-Za-z0-9_-]{48}\?bin=[A-Za-z0-9_-]+&amount=20000000$/)
+export const ChatDomainLinkSchema = z.object({
+  domain: z.string().min(1).max(126),
+  category: z.literal('msg_id'),
+  key: IdentityKeySchema,
+  owner: z.string().min(1).max(128),
+  txUrl: DomainTransactionUrlSchema,
+})
+export type ChatDomainLink = z.infer<typeof ChatDomainLinkSchema>
+export const chatPrepareDomainLinkContract = defineRequest({
+  ...mainBase,
+  channel: CHAT_CHANNELS.prepareDomainLink,
+  input: z.tuple([z.string().min(1).max(253)]),
+  output: ChatDomainLinkSchema,
+  errors: ['INVALID_DOMAIN', 'DOMAIN_LINK_FAILED', ...ChatPublicErrorCodes],
+})
+export const chatOpenDomainLinkContract = defineRequest({
+  ...mainBase,
+  channel: CHAT_CHANNELS.openDomainLink,
+  input: z.tuple([DomainTransactionUrlSchema]),
+  output: z.object({ opened: z.literal(true) }),
+  errors: ['WALLET_OPEN_FAILED'],
 })
 export const chatDetectDomainsContract = defineRequest({
   ...mainBase,
@@ -329,12 +401,17 @@ export const CHAT_REQUEST_CONTRACTS = [
   chatSendContract,
   chatDmSendContract,
   chatMutateContract,
+  chatPendingContract,
+  chatRetryPendingContract,
+  chatDiscardPendingContract,
   chatTimelineBeforeContract,
   chatDisconnectContract,
   chatLeaveContract,
   chatIdentityContract,
   chatLinkIdentityContract,
   chatClaimDomainContract,
+  chatPrepareDomainLinkContract,
+  chatOpenDomainLinkContract,
   chatClearDomainContract,
   chatDetectDomainsContract,
   chatResetIdentityContract,

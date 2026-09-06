@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo, memo } from 'react'
 import type { OwnChatIdentity } from '@shared/types'
-import type { ChatRoomPresence, ChatRoomState } from '@shared/ipc-contract/chat'
+import type { ChatPendingOperation, ChatRoomPresence, ChatRoomState } from '@shared/ipc-contract/chat'
 import ChatSidebar from './chat/ChatSidebar'
 import ChatRoomView from './chat/ChatRoomView'
 import DmView from './chat/DmView'
@@ -37,6 +37,9 @@ function ChatPage(): React.JSX.Element {
   const [identity, setIdentity] = useState<OwnChatIdentity | null>(null)
   const [roomState, setRoomState] = useState<ChatRoomState | null>(null)
   const [presence, setPresence] = useState<ChatRoomPresence | null>(null)
+  const [pendingOperation, setPendingOperation] = useState<ChatPendingOperation | null>(null)
+  const [pendingBusy, setPendingBusy] = useState(false)
+  const [canonicalBusy, setCanonicalBusy] = useState(false)
 
   const [activeDm, setActiveDm] = useState<string>('')
   const [dmInput, setDmInput] = useState('')
@@ -51,7 +54,25 @@ function ChatPage(): React.JSX.Element {
   const connectedKeyRef = useRef<string | null>(null)
   const timelineRef = useRef(timeline)
   timelineRef.current = timeline
+  const pendingOperationRef = useRef(pendingOperation)
+  pendingOperationRef.current = pendingOperation
+  const canonicalNonceRef = useRef(0)
+  const canonicalOperationsRef = useRef(new Map<string, number>())
   const pendingTimelineRef = useRef(new Map<string, ChatTimelineItem[]>())
+
+  const beginCanonical = useCallback((targetRoom: string): number | null => {
+    if (canonicalOperationsRef.current.has(targetRoom)) return null
+    const token = ++canonicalNonceRef.current
+    canonicalOperationsRef.current.set(targetRoom, token)
+    if (roomRef.current === targetRoom) setCanonicalBusy(true)
+    return token
+  }, [])
+
+  const finishCanonical = useCallback((targetRoom: string, token: number): void => {
+    if (canonicalOperationsRef.current.get(targetRoom) !== token) return
+    canonicalOperationsRef.current.delete(targetRoom)
+    if (roomRef.current === targetRoom) setCanonicalBusy(false)
+  }, [])
 
   const refreshIdentity = useCallback(() => {
     messengerClient
@@ -85,6 +106,9 @@ function ChatPage(): React.JSX.Element {
     setLoadingOlder(false)
     setRoomState(null)
     setPresence(null)
+    setPendingOperation(null)
+    setPendingBusy(false)
+    setCanonicalBusy(canonicalOperationsRef.current.has(room))
     setError(null)
     if (!room) {
       setStatus('idle')
@@ -103,6 +127,7 @@ function ChatPage(): React.JSX.Element {
           setRoomState(res.state)
           setPresence(res.presence)
           setTimeline(mergeTimelineItems(res.timeline.items, pendingTimelineRef.current.get(res.room) ?? []))
+          setPendingOperation(res.pending)
           pendingTimelineRef.current.clear()
           setHasOlder(res.timeline.hasMore)
           if (res.room !== room) {
@@ -135,6 +160,9 @@ function ChatPage(): React.JSX.Element {
       }
       if (item.room !== roomRef.current) return
       setTimeline((current) => mergeTimelineItems(current, item, Number.POSITIVE_INFINITY))
+      setPendingOperation((current) =>
+        current?.room === item.room && current.eventId === item.eventId ? { ...current, status: 'committed' } : current
+      )
     })
     return () => off()
   }, [])
@@ -165,6 +193,7 @@ function ChatPage(): React.JSX.Element {
         const first = timelineRef.current[0]
         const incomingFirst = event.timeline.items[0]
         setTimeline((current) => mergeTimelineItems(current, event.timeline.items, Number.POSITIVE_INFINITY))
+        setPendingOperation(event.pending)
         if (!first || !incomingFirst || first.seqno >= incomingFirst.seqno) setHasOlder(event.timeline.hasMore)
         updateName(event.room, event.state.name)
         setStatus('connected')
@@ -194,6 +223,12 @@ function ChatPage(): React.JSX.Element {
     })
     return () => off()
   }, [updateName])
+
+  const refreshPending = useCallback(async (targetRoom: string) => {
+    const result = await messengerClient.getPending(targetRoom)
+    if (roomRef.current === targetRoom) setPendingOperation(result.pending)
+    return result.pending
+  }, [])
 
   const openRoom = useCallback(
     (r: FollowedRoom) => {
@@ -262,6 +297,12 @@ function ChatPage(): React.JSX.Element {
 
   const leaveRoom = useCallback(async () => {
     const targetRoom = roomRef.current
+    if (pendingOperationRef.current !== null) {
+      setError('Resolve the pending operation before leaving this room.')
+      return
+    }
+    const token = beginCanonical(targetRoom)
+    if (token === null) return
     try {
       if (/^[A-Za-z0-9_-]{43}$/.test(targetRoom)) await messengerClient.leave(targetRoom)
       else await messengerClient.disconnect()
@@ -269,9 +310,14 @@ function ChatPage(): React.JSX.Element {
       setRoom('')
       setNode('')
     } catch (cause) {
-      if (roomRef.current === targetRoom) setError(cause instanceof Error ? cause.message : String(cause))
+      if (roomRef.current === targetRoom) {
+        await refreshPending(targetRoom).catch(() => {})
+        if (roomRef.current === targetRoom) setError(cause instanceof Error ? cause.message : String(cause))
+      }
+    } finally {
+      finishCanonical(targetRoom, token)
     }
-  }, [])
+  }, [beginCanonical, finishCanonical, refreshPending])
 
   const handleAdd = useCallback(
     (r: string, n?: string) => {
@@ -283,6 +329,12 @@ function ChatPage(): React.JSX.Element {
 
   const handleRemove = useCallback(
     async (r: string) => {
+      if (r === roomRef.current && pendingOperationRef.current !== null) {
+        setError('Resolve the pending operation before unfollowing this room.')
+        return
+      }
+      const token = beginCanonical(r)
+      if (token === null) return
       try {
         if (/^[A-Za-z0-9_-]{43}$/.test(r)) await messengerClient.leave(r)
         else if (r === roomRef.current) await messengerClient.disconnect()
@@ -293,15 +345,17 @@ function ChatPage(): React.JSX.Element {
         }
       } catch (cause) {
         setError(cause instanceof Error ? cause.message : String(cause))
+      } finally {
+        finishCanonical(r, token)
       }
     },
-    [remove]
+    [beginCanonical, finishCanonical, remove]
   )
 
   const send = useCallback(async () => {
     const targetRoom = roomRef.current
     const text = input.trim()
-    if (!text || status !== 'connected') return
+    if (!text || status !== 'connected' || pendingOperation !== null) return
     const ownKey = identityRef.current?.identityKey
     if (
       roomState?.writePolicy === 'admins' &&
@@ -310,6 +364,8 @@ function ChatPage(): React.JSX.Element {
       setError('This room is read-only for non-admins.')
       return
     }
+    const token = beginCanonical(targetRoom)
+    if (token === null) return
     setInput('')
     setError(null)
     try {
@@ -317,30 +373,82 @@ function ChatPage(): React.JSX.Element {
       if (roomRef.current !== targetRoom) return
       if (res.identity) setIdentity(res.identity)
       if (!res.sent) {
-        setInput(text)
+        setInput((current) => (current.trim() ? current : text))
         setError('Message was not sent.')
         return
       }
       setTimeline((current) => mergeTimelineItems(current, res.item, Number.POSITIVE_INFINITY))
     } catch (e) {
       if (roomRef.current !== targetRoom) return
-      setInput(text)
-      setError(e instanceof Error ? e.message : String(e))
+      setInput((current) => (current.trim() ? current : text))
+      await refreshPending(targetRoom).catch(() => {})
+      if (roomRef.current === targetRoom) setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      finishCanonical(targetRoom, token)
     }
-  }, [input, status, roomState])
+  }, [beginCanonical, finishCanonical, input, pendingOperation, refreshPending, status, roomState])
 
-  const mutateRoom = useCallback(async (mutation: Parameters<typeof messengerClient.mutate>[1]) => {
+  const mutateRoom = useCallback(
+    async (mutation: Parameters<typeof messengerClient.mutate>[1]) => {
+      const targetRoom = roomRef.current
+      if (pendingOperationRef.current !== null) return
+      const token = beginCanonical(targetRoom)
+      if (token === null) return
+      setError(null)
+      try {
+        const result = await messengerClient.mutate(targetRoom, mutation)
+        if (roomRef.current !== targetRoom) return
+        setTimeline((current) => mergeTimelineItems(current, result.item, Number.POSITIVE_INFINITY))
+      } catch (cause) {
+        if (roomRef.current !== targetRoom) return
+        await refreshPending(targetRoom).catch(() => {})
+        if (roomRef.current === targetRoom) setError(cause instanceof Error ? cause.message : String(cause))
+      } finally {
+        finishCanonical(targetRoom, token)
+      }
+    },
+    [beginCanonical, finishCanonical, refreshPending]
+  )
+
+  const retryPending = useCallback(async () => {
+    const operation = pendingOperationRef.current
     const targetRoom = roomRef.current
+    if (!operation || operation.room !== targetRoom || pendingBusy || status !== 'connected') return
+    setPendingBusy(true)
     setError(null)
     try {
-      const result = await messengerClient.mutate(targetRoom, mutation)
-      if (roomRef.current !== targetRoom) return
+      const result = await messengerClient.retryPending(targetRoom, operation.eventId)
+      if (roomRef.current !== targetRoom || pendingOperationRef.current?.eventId !== operation.eventId) return
       setTimeline((current) => mergeTimelineItems(current, result.item, Number.POSITIVE_INFINITY))
+      setPendingOperation(null)
     } catch (cause) {
       if (roomRef.current !== targetRoom) return
-      setError(cause instanceof Error ? cause.message : String(cause))
+      await refreshPending(targetRoom).catch(() => {})
+      if (roomRef.current === targetRoom) setError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      if (roomRef.current === targetRoom) setPendingBusy(false)
     }
-  }, [])
+  }, [pendingBusy, refreshPending, status])
+
+  const discardPending = useCallback(async () => {
+    const operation = pendingOperationRef.current
+    const targetRoom = roomRef.current
+    if (!operation || operation.room !== targetRoom || pendingBusy) return
+    setPendingBusy(true)
+    setError(null)
+    try {
+      await messengerClient.discardPending(targetRoom, operation.eventId)
+      if (roomRef.current === targetRoom && pendingOperationRef.current?.eventId === operation.eventId) {
+        setPendingOperation(null)
+      }
+    } catch (cause) {
+      if (roomRef.current !== targetRoom) return
+      await refreshPending(targetRoom).catch(() => {})
+      if (roomRef.current === targetRoom) setError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      if (roomRef.current === targetRoom) setPendingBusy(false)
+    }
+  }, [pendingBusy, refreshPending])
 
   const loadOlder = useCallback(async () => {
     const targetRoom = roomRef.current
@@ -409,10 +517,14 @@ function ChatPage(): React.JSX.Element {
           loadingOlder={loadingOlder}
           status={status}
           error={error}
+          pending={pendingOperation}
+          pendingBusy={pendingBusy || canonicalBusy}
           timeline={timeline}
           input={input}
           onInput={setInput}
           onSend={send}
+          onRetryPending={() => void retryPending()}
+          onDiscardPending={() => void discardPending()}
           onLeave={leaveRoom}
           onOpenDm={handleOpenDm}
           onMutate={mutateRoom}

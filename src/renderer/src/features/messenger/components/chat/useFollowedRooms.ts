@@ -1,4 +1,5 @@
 import { useCallback, useState } from 'react'
+import { isMessengerDomain, isMessengerReference as validReference } from '@/features/messenger/domain'
 
 export interface FollowedRoom {
   room: string
@@ -9,11 +10,6 @@ export interface FollowedRoom {
 
 const KEY = 'messenger.rooms.v1'
 const LEGACY_KEY = 'groupchat.rooms'
-
-function validReference(value: string): boolean {
-  const normalized = value.trim()
-  return /^[A-Za-z0-9_-]{43}$/.test(normalized) || /^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.ton$/i.test(normalized)
-}
 
 function readStored(): FollowedRoom[] | null {
   const raw = localStorage.getItem(KEY) ?? localStorage.getItem(LEGACY_KEY)
@@ -70,7 +66,7 @@ export function useFollowedRooms(): {
         {
           room: name,
           node: node?.trim() || undefined,
-          alias: name.toLowerCase().endsWith('.ton') ? name.toLowerCase() : undefined,
+          alias: isMessengerDomain(name) ? name.toLowerCase() : undefined,
         },
         ...prev.filter((r) => r.room !== name),
       ]
@@ -92,8 +88,7 @@ export function useFollowedRooms(): {
     setRooms((prev) => {
       const source = prev.find((entry) => entry.room === reference)
       const existing = prev.find((entry) => entry.room === roomId)
-      const alias =
-        source?.alias ?? (reference.toLowerCase().endsWith('.ton') ? reference.toLowerCase() : existing?.alias)
+      const alias = source?.alias ?? (isMessengerDomain(reference) ? reference.toLowerCase() : existing?.alias)
       const next = [
         {
           room: roomId,

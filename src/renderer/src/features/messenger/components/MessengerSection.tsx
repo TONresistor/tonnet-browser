@@ -8,6 +8,7 @@ import { avatarColor, initial } from '@/features/messenger/components/chat/util'
 import '@/features/settings/components/settings.css'
 import { messengerClient } from '@/features/messenger/client'
 import { AppIcon } from '@/components/ui/AppIcon'
+import { DomainLink } from './DomainLink'
 
 const log = createLogger('messenger-settings')
 
@@ -19,9 +20,6 @@ export const MessengerSection = memo(function MessengerSection({ onIdentityChang
   const [identity, setIdentity] = useState<OwnChatIdentity | null>(null)
   const [loading, setLoading] = useState(true)
   const [copied, setCopied] = useState(false)
-  const [domainInput, setDomainInput] = useState('')
-  const [domainBusy, setDomainBusy] = useState(false)
-  const [domainError, setDomainError] = useState<string | null>(null)
   const resetConfirm = useConfirmAction()
 
   const applyIdentity = useCallback(
@@ -57,31 +55,6 @@ export const MessengerSection = memo(function MessengerSection({ onIdentityChang
     })
   }, [identity])
 
-  const confirmDomain = useCallback(async () => {
-    const domain = domainInput.trim().toLowerCase()
-    if (!domain) return
-    setDomainBusy(true)
-    setDomainError(null)
-    try {
-      const result = await messengerClient.claimDomain(domain)
-      if (!result.ok) throw new Error(result.reason ?? 'The msg_id record does not match this identity')
-      applyIdentity(result.identity)
-      setDomainInput('')
-    } catch (error) {
-      setDomainError(error instanceof Error ? error.message : 'Unable to verify domain')
-    } finally {
-      setDomainBusy(false)
-    }
-  }, [applyIdentity, domainInput])
-
-  const clearDomain = useCallback(async () => {
-    try {
-      applyIdentity(await messengerClient.clearDomain())
-    } catch (error) {
-      log.error('Failed to clear identity domain:', error)
-    }
-  }, [applyIdentity])
-
   const resetIdentity = useCallback(async () => {
     if (!resetConfirm.trigger()) return
     try {
@@ -103,8 +76,8 @@ export const MessengerSection = memo(function MessengerSection({ onIdentityChang
   const seed = identity?.domain || identity?.identityKey || '?'
 
   return (
-    <div className="px-1">
-      <div className="flex flex-col items-center gap-2.5 py-3">
+    <div className="min-w-0 max-w-full overflow-x-hidden px-1 pb-4">
+      <div className="flex flex-col items-center gap-3 pb-5 pt-3">
         <span
           className="grid h-16 w-16 place-items-center rounded-full text-[22px] font-semibold text-identity-foreground"
           style={{ backgroundColor: avatarColor(seed) }}
@@ -114,58 +87,52 @@ export const MessengerSection = memo(function MessengerSection({ onIdentityChang
         <div
           className={
             identity?.domain
-              ? 'text-[15px] font-medium lowercase text-foreground'
-              : 'font-mono text-[15px] text-foreground'
+              ? 'max-w-full break-all text-center text-[17px] font-medium lowercase text-foreground'
+              : 'max-w-full break-all text-center font-mono text-[15px] text-foreground'
           }
         >
           {label}
         </div>
       </div>
 
-      <div className="settings-group">
-        <button type="button" onClick={copyIdentity} className="flex w-full items-center gap-3 px-3 py-2.5 text-left">
-          <span className="grid h-[29px] w-[29px] place-items-center rounded-control bg-secondary text-secondary-foreground">
-            <AppIcon name="messengerDevice" className="h-[17px] w-[17px] text-identity-foreground" />
+      <div className="settings-group min-w-0 max-w-full overflow-hidden">
+        <button
+          type="button"
+          onClick={copyIdentity}
+          aria-label="Copy identity key"
+          title={copied ? 'Copied' : 'Copy identity key'}
+          className="flex min-w-0 w-full items-center gap-3 px-3 py-3 text-left transition-colors hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
+        >
+          <span className="grid h-7 w-7 shrink-0 place-items-center text-muted-foreground">
+            <AppIcon name="messengerDevice" className="h-[17px] w-[17px]" />
           </span>
           <div className="min-w-0 flex-1">
-            <div className="text-[14px] font-medium text-foreground">Identity key</div>
-            <div className="truncate font-mono text-[11px] text-muted-foreground">{identity?.identityKey}</div>
+            <div className="text-xs text-muted-foreground">Identity key</div>
+            <div className="mt-0.5 truncate font-mono text-[11px] text-foreground/80">{identity?.identityKey}</div>
           </div>
-          {copied ? <Check className="h-4 w-4 text-primary" /> : <Copy className="h-4 w-4 text-muted-foreground" />}
+          {copied ? (
+            <Check className="h-4 w-4 shrink-0 text-primary" />
+          ) : (
+            <Copy className="h-4 w-4 shrink-0 text-muted-foreground" />
+          )}
         </button>
-      </div>
-
-      <div className="mt-3 settings-group p-3">
-        <div className="mb-2 text-[13px] font-medium text-foreground">TON DNS identity</div>
-        {identity?.domain ? (
-          <div className="flex items-center gap-2">
-            <span className="min-w-0 flex-1 truncate text-sm lowercase text-foreground">{identity.domain}</span>
-            <Button variant="ghost" size="sm" onClick={() => void clearDomain()}>
-              Remove
-            </Button>
-          </div>
-        ) : (
-          <div className="flex gap-2">
-            <input
-              value={domainInput}
-              onChange={(event) => setDomainInput(event.target.value)}
-              placeholder="alice.ton"
-              className="min-w-0 flex-1 rounded-lg border border-border-subtle bg-surface px-3 py-2 text-sm text-foreground"
-            />
-            <Button size="sm" disabled={domainBusy || !domainInput.trim()} onClick={() => void confirmDomain()}>
-              {domainBusy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : 'Verify'}
-            </Button>
-          </div>
+        {identity && (
+          <DomainLink
+            key={`${identity.identityKey}:${identity.domain ?? ''}`}
+            identity={identity}
+            onIdentityChange={applyIdentity}
+          />
         )}
-        <p className="mt-2 text-[11px] text-muted-foreground">
-          The domain must contain msg_id={identity?.identityKey ?? 'your identity key'}.
-        </p>
-        {domainError && <p className="mt-1 text-[11px] text-destructive">{domainError}</p>}
       </div>
 
       <Button
         variant={resetConfirm.isArmed() ? 'destructive' : 'ghost'}
-        className="mt-3 w-full"
+        size="sm"
+        className={
+          resetConfirm.isArmed()
+            ? 'mx-auto mt-5 flex'
+            : 'mx-auto mt-5 flex text-muted-foreground hover:bg-destructive/10 hover:text-destructive'
+        }
         onClick={() => void resetIdentity()}
       >
         {resetConfirm.isArmed() ? 'Confirm new identity' : 'Reset identity'}

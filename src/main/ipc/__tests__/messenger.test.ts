@@ -12,8 +12,14 @@ const mocks = vi.hoisted(() => {
       super(message)
     }
   }
-  return { BoundaryError, handlers: new Map<string, (...args: unknown[]) => Promise<unknown>>(), emit: vi.fn() }
+  return {
+    BoundaryError,
+    handlers: new Map<string, (...args: unknown[]) => Promise<unknown>>(),
+    emit: vi.fn(),
+    openExternal: vi.fn().mockResolvedValue(undefined),
+  }
 })
+vi.mock('electron', () => ({ shell: { openExternal: mocks.openExternal } }))
 vi.mock('../handlers/shared', () => ({
   IpcBoundaryError: mocks.BoundaryError,
   secureHandleWithEvent: (channel: string, handler: (...args: unknown[]) => Promise<unknown>) => {
@@ -86,6 +92,14 @@ const DIRECT = {
   direction: 'sent',
   author_name: 'alice',
 }
+const PENDING = {
+  room: ROOM,
+  event_id: 'P'.repeat(43),
+  status: 'uncertain' as const,
+  timestamp: TIMESTAMP,
+  event: { actor: IDENTITY, kind: 'message' as const, text: 'pending message' },
+}
+const RETRIED_EVENT = { ...EVENT, event_id: PENDING.event_id, text: PENDING.event.text }
 
 describe('standalone Messenger IPC', () => {
   let manager: EventEmitter & {
@@ -116,6 +130,9 @@ describe('standalone Messenger IPC', () => {
       }
       if (method === 'room.sendMessage') return EVENT
       if (method === 'room.getTimeline') return JOIN.timeline
+      if (method === 'room.getPending') return { pending: null }
+      if (method === 'room.retryPending') return EVENT
+      if (method === 'room.discardPending') return { discarded: true }
       if (method === 'room.leave') return { left: true }
       if (method === 'dm.send') return DIRECT
       throw new Error('Unexpected method ' + method)
@@ -129,6 +146,44 @@ describe('standalone Messenger IPC', () => {
   })
 
   afterEach(() => lifecycle.dispose())
+
+  it('prepares the exact helper transaction and opens it only on request', async () => {
+    const txUrl = `ton://transfer/${'E'.repeat(48)}?bin=abc&amount=20000000`
+    manager.request.mockResolvedValueOnce({
+      Domain: 'alice.ton',
+      Category: 'msg_id',
+      Key: IDENTITY.key,
+      Owner: 'owner',
+      TxURL: txUrl,
+    })
+    await expect(invoke('chat:identity:prepare-domain-link', 'alice.ton')).resolves.toEqual({
+      domain: 'alice.ton',
+      category: 'msg_id',
+      key: IDENTITY.key,
+      owner: 'owner',
+      txUrl,
+    })
+    expect(manager.request).toHaveBeenCalledWith('identity.prepareDomainLink', { domain: 'alice.ton' })
+    expect(mocks.openExternal).not.toHaveBeenCalled()
+    await invoke('chat:identity:open-domain-link', txUrl)
+    expect(mocks.openExternal).toHaveBeenCalledWith(txUrl)
+    await expect(invoke('chat:identity:open-domain-link', 'file:///tmp/test')).rejects.toThrow()
+    expect(mocks.openExternal).toHaveBeenCalledTimes(1)
+  })
+
+  it('invalidates a malformed prepared domain transaction', async () => {
+    manager.request.mockResolvedValueOnce({
+      Domain: 'alice.ton',
+      Category: 'msg_id',
+      Key: IDENTITY.key,
+      Owner: 'owner',
+      TxURL: 'https://example.com',
+    })
+    await expect(invoke('chat:identity:prepare-domain-link', 'alice.ton')).rejects.toMatchObject({
+      code: 'CHAT_PROTOCOL_INVALID',
+    })
+    expect(manager.invalidate).toHaveBeenCalledTimes(1)
+  })
 
   it('converts canonical and direct timestamps to renderer milliseconds', async () => {
     const joined = (await invoke('chat:connect', ROOM)) as { timeline: { items: { ts: number }[] } }
@@ -160,10 +215,75 @@ describe('standalone Messenger IPC', () => {
     ['INVALID_IDENTITY_DOMAIN', 'CHAT_INVALID_IDENTITY_DOMAIN', false],
     ['TIMEOUT', 'CHAT_TIMEOUT', true],
     ['SEQUENCER_UNAVAILABLE', 'CHAT_SEQUENCER_UNAVAILABLE', true],
+    ['SEND_UNCERTAIN', 'CHAT_SEND_UNCERTAIN', true],
+    ['PENDING_OPERATION', 'CHAT_PENDING_OPERATION', true],
   ])('preserves the declared code for %s', async (rpcCode, ipcCode, retryable) => {
     await invoke('chat:connect', ROOM)
     manager.request.mockRejectedValueOnce(new MessengerRpcError('rejected', String(rpcCode), -32000))
     await expect(invoke('chat:send', ROOM, 'hello')).rejects.toMatchObject({ code: ipcCode, retryable })
+  })
+
+  it('invalidates the helper on a protocol error', async () => {
+    await invoke('chat:connect', ROOM)
+    manager.request.mockRejectedValueOnce(new MessengerRpcError('invalid response', 'PROTOCOL_ERROR', -32034))
+    await expect(invoke('chat:send', ROOM, 'hello')).rejects.toMatchObject({ code: 'CHAT_PROTOCOL_INVALID' })
+    expect(manager.invalidate).toHaveBeenCalledOnce()
+  })
+
+  it('invalidates protocol failures during domain confirmation', async () => {
+    manager.request.mockRejectedValueOnce(new MessengerRpcError('invalid identity', 'PROTOCOL_ERROR', -32034))
+    await expect(invoke('chat:identity:claim-domain', 'alice.ton')).rejects.toMatchObject({
+      code: 'CHAT_PROTOCOL_INVALID',
+    })
+    expect(manager.invalidate).toHaveBeenCalledOnce()
+  })
+
+  it('loads, retries and explicitly discards the exact pending operation', async () => {
+    await invoke('chat:connect', ROOM)
+    manager.request.mockResolvedValueOnce({ pending: PENDING })
+    await expect(invoke('chat:pending', ROOM)).resolves.toEqual({
+      pending: expect.objectContaining({
+        room: ROOM,
+        eventId: PENDING.event_id,
+        status: 'uncertain',
+        kind: 'message',
+        summary: 'pending message',
+        text: 'pending message',
+      }),
+    })
+    expect(manager.request).toHaveBeenLastCalledWith('room.getPending', { room: ROOM })
+
+    manager.request.mockResolvedValueOnce(RETRIED_EVENT)
+    await expect(invoke('chat:pending:retry', ROOM, PENDING.event_id)).resolves.toMatchObject({
+      item: { eventId: PENDING.event_id, kind: 'message', text: PENDING.event.text },
+    })
+    expect(manager.request).toHaveBeenLastCalledWith('room.retryPending', {
+      room: ROOM,
+      event_id: PENDING.event_id,
+    })
+
+    manager.request.mockResolvedValueOnce({ discarded: true })
+    await expect(invoke('chat:pending:discard', ROOM, PENDING.event_id)).resolves.toEqual({ discarded: true })
+    expect(manager.request).toHaveBeenLastCalledWith('room.discardPending', {
+      room: ROOM,
+      event_id: PENDING.event_id,
+    })
+  })
+
+  it('rejects pending state bound to another room', async () => {
+    await invoke('chat:connect', ROOM)
+    manager.request.mockResolvedValueOnce({ pending: { ...PENDING, room: OTHER_ROOM } })
+    await expect(invoke('chat:pending', ROOM)).rejects.toMatchObject({ code: 'CHAT_PROTOCOL_INVALID' })
+    expect(manager.invalidate).toHaveBeenCalledOnce()
+  })
+
+  it('invalidates a retry result bound to another pending event', async () => {
+    await invoke('chat:connect', ROOM)
+    manager.request.mockResolvedValueOnce(EVENT)
+    await expect(invoke('chat:pending:retry', ROOM, PENDING.event_id)).rejects.toMatchObject({
+      code: 'CHAT_PROTOCOL_INVALID',
+    })
+    expect(manager.invalidate).toHaveBeenCalledOnce()
   })
 
   it('rejects unsafe sequence conversion and malformed helper results', async () => {
@@ -245,6 +365,27 @@ describe('standalone Messenger IPC', () => {
     })
   })
 
+  it('allows pending inspection and discard while the selected room reconnects', async () => {
+    await invoke('chat:connect', ROOM)
+    manager.emit('client.exit', new Error('exit'))
+    manager.request.mockResolvedValueOnce({ pending: PENDING })
+    await expect(invoke('chat:pending', ROOM)).resolves.toMatchObject({ pending: { eventId: PENDING.event_id } })
+    manager.request.mockResolvedValueOnce({ discarded: true })
+    await expect(invoke('chat:pending:discard', ROOM, PENDING.event_id)).resolves.toEqual({ discarded: true })
+    await expect(invoke('chat:pending:retry', ROOM, PENDING.event_id)).rejects.toMatchObject({
+      code: 'CHAT_DISCONNECTED',
+    })
+  })
+
+  it('keeps the room selected when leave is rejected by pending recovery', async () => {
+    await invoke('chat:connect', ROOM)
+    manager.request.mockRejectedValueOnce(new MessengerRpcError('pending', 'PENDING_OPERATION', -32033))
+    await expect(invoke('chat:leave', ROOM)).rejects.toMatchObject({ code: 'CHAT_PENDING_OPERATION' })
+    manager.request.mockResolvedValueOnce({ pending: PENDING })
+    await expect(invoke('chat:pending', ROOM)).resolves.toMatchObject({ pending: { eventId: PENDING.event_id } })
+    expect(manager.setActive).not.toHaveBeenLastCalledWith(false)
+  })
+
   it('retains the requested alias through a failed join and canonical recovery', async () => {
     await invoke('chat:identity')
     manager.request
@@ -291,6 +432,19 @@ describe('standalone Messenger IPC', () => {
     await Promise.resolve()
     await Promise.resolve()
     expect(mocks.emit).not.toHaveBeenCalled()
+  })
+
+  it('surfaces protocol-invalid reconnect refreshes after invalidating the helper', async () => {
+    await invoke('chat:connect', ROOM)
+    manager.request.mockRejectedValueOnce(new MessengerRpcError('invalid pending receipt', 'PROTOCOL_ERROR', -32034))
+    manager.emit('room.connection', { ...JOIN, status: 'connected' })
+    await vi.waitFor(() =>
+      expect(mocks.emit).toHaveBeenCalledWith(
+        expect.objectContaining({ channel: 'chat:connection' }),
+        expect.objectContaining({ room: ROOM, status: 'error', code: 'CHAT_PROTOCOL_INVALID', retryable: false })
+      )
+    )
+    expect(manager.invalidate).toHaveBeenCalledOnce()
   })
 
   it('does not reactivate a room when an older refresh finishes during reconnect', async () => {

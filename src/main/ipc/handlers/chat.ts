@@ -1,5 +1,7 @@
 import {
   chatClaimDomainContract,
+  chatPrepareDomainLinkContract,
+  chatOpenDomainLinkContract,
   chatClearDomainContract,
   chatConnectionContract,
   chatConnectContract,
@@ -7,11 +9,14 @@ import {
   chatDisconnectContract,
   chatDmMessageContract,
   chatDmSendContract,
+  chatDiscardPendingContract,
   chatIdentityContract,
   chatIdentityChangedContract,
   chatLeaveContract,
   chatLinkIdentityContract,
   chatMutateContract,
+  chatPendingContract,
+  chatRetryPendingContract,
   chatResetIdentityContract,
   chatRoomPresenceContract,
   chatRoomStateContract,
@@ -21,6 +26,7 @@ import {
   type ChatRoomState,
   type ChatRoomConnection,
   type ChatRoomPresence,
+  type ChatPendingOperation,
   type ChatTimelineItem,
   type ChatTimelinePage,
 } from '../../../shared/ipc-contract/chat'
@@ -31,17 +37,21 @@ import type { ServiceRegistry } from '../../services'
 import { MessengerRpcError } from '../../messenger/client-manager'
 import { onEmitter } from '../../utils/disposable'
 import { z } from 'zod'
+import { shell } from 'electron'
 import { IpcBoundaryError } from './shared'
 import {
   rpcIdentitySchema,
+  rpcDomainLinkSchema,
   rpcEventSchema,
   rpcStateSchema,
   rpcPresenceSchema,
   rpcConnectionSchema,
   rpcDirectSchema,
   rpcPageSchema,
+  rpcPendingResultSchema,
   rpcJoinSchema,
   rpcRoomKeySchema,
+  type RpcPendingOperation,
 } from '../../messenger/protocol'
 
 interface RpcIdentity {
@@ -165,6 +175,37 @@ function roomPresence(value: RpcPresence): ChatRoomPresence {
   return { roomId: value.room, onlineUsers: value.online_users }
 }
 
+function pendingOperation(value: RpcPendingOperation): ChatPendingOperation {
+  const event = value.event
+  let summary = ''
+  switch (event.kind) {
+    case 'message':
+      summary = event.text
+      break
+    case 'pin':
+    case 'unpin':
+      summary = `${event.kind === 'pin' ? 'Pin' : 'Unpin'} message #${event.target_message_id}`
+      break
+    case 'metadata':
+      summary = `Update room details to “${event.name}”`
+      break
+    case 'write-policy':
+      summary = `Set writing to ${event.write_policy}`
+      break
+    default:
+      summary = `${event.kind.replaceAll('-', ' ')} ${event.subject_key}`
+  }
+  return {
+    room: value.room,
+    eventId: value.event_id,
+    status: value.status,
+    ts: value.timestamp * 1000,
+    kind: event.kind,
+    summary,
+    text: event.kind === 'message' ? event.text : undefined,
+  }
+}
+
 function publicFailure(error: unknown): never {
   if (error instanceof IpcBoundaryError) throw error
   if (error instanceof MessengerRpcError) {
@@ -183,8 +224,18 @@ function publicFailure(error: unknown): never {
       NOT_CONNECTED: 'CHAT_DISCONNECTED',
       SESSION_CHANGED: 'CHAT_DISCONNECTED',
       PROTOCOL_INVALID: 'CHAT_PROTOCOL_INVALID',
+      PROTOCOL_ERROR: 'CHAT_PROTOCOL_INVALID',
+      SEND_UNCERTAIN: 'CHAT_SEND_UNCERTAIN',
+      PENDING_OPERATION: 'CHAT_PENDING_OPERATION',
     }
-    const retryable = ['SEQUENCER_UNAVAILABLE', 'TIMEOUT', 'ROOM_UNAVAILABLE', 'NOT_CONNECTED'].includes(error.code)
+    const retryable = [
+      'SEQUENCER_UNAVAILABLE',
+      'TIMEOUT',
+      'ROOM_UNAVAILABLE',
+      'NOT_CONNECTED',
+      'SEND_UNCERTAIN',
+      'PENDING_OPERATION',
+    ].includes(error.code)
     ipcFailure(codes[error.code] ?? 'CHAT_OPERATION_FAILED', error.message, retryable, error)
   }
   if (error instanceof z.ZodError) {
@@ -216,14 +267,33 @@ export function registerChatHandlers(registry: ServiceRegistry): void {
     const parsed = schema.safeParse(value)
     if (!parsed.success) {
       const error = new MessengerRpcError('Invalid Messenger response', 'PROTOCOL_INVALID', -32000)
-      manager.invalidate(error)
       throw error
     }
     return parsed.data
   }
 
+  const fail = (error: unknown): never => {
+    if (error instanceof MessengerRpcError && (error.code === 'PROTOCOL_ERROR' || error.code === 'PROTOCOL_INVALID')) {
+      manager.invalidate(error)
+    }
+    publicFailure(error)
+  }
+
   const requireRoom = (roomId: string): void => {
     if (roomId !== activeRoom) ipcFailure('CHAT_DISCONNECTED', 'Room is not active')
+  }
+
+  const requireSelectedRoom = (roomId: string): void => {
+    if (roomId !== wantedRoom) ipcFailure('CHAT_DISCONNECTED', 'Room is not selected')
+  }
+
+  const getPending = async (roomId: string): Promise<ChatPendingOperation | null> => {
+    const value = await request(
+      'room.getPending',
+      rpcPendingResultSchema.refine((result) => result.pending === null || result.pending.room === roomId),
+      { room: roomId }
+    )
+    return value.pending ? pendingOperation(value.pending) : null
   }
 
   const getIdentity = async (): Promise<OwnChatIdentity> => {
@@ -305,12 +375,15 @@ export function registerChatHandlers(registry: ServiceRegistry): void {
           retryable: Boolean(raw.retryable ?? true),
         })
       } else if (status === 'connected') {
-        void request(
-          'room.getTimeline',
-          rpcPageSchema.refine((page) => page.items.every((item) => item.room === room)),
-          { room, limit: 100 }
-        )
-          .then((page) => {
+        void Promise.all([
+          request(
+            'room.getTimeline',
+            rpcPageSchema.refine((page) => page.items.every((item) => item.room === room)),
+            { room, limit: 100 }
+          ),
+          getPending(room),
+        ])
+          .then(([page, pending]) => {
             if (generation !== currentGeneration || currentRefresh !== refreshGeneration || wantedRoom !== room) return
             activeRoom = room
             emitContractToRenderer(chatConnectionContract, {
@@ -324,18 +397,22 @@ export function registerChatHandlers(registry: ServiceRegistry): void {
                 items: page.items.map((item) => timelineItem(item, identity?.identityKey)),
                 hasMore: page.has_more,
               },
+              pending,
             })
           })
-          .catch(() => {
+          .catch((error: unknown) => {
             if (generation !== currentGeneration || currentRefresh !== refreshGeneration || wantedRoom !== room) return
             activeRoom = null
+            const protocolInvalid =
+              error instanceof MessengerRpcError && ['PROTOCOL_ERROR', 'PROTOCOL_INVALID'].includes(error.code)
+            if (protocolInvalid) manager.invalidate(error)
             emitContractToRenderer(chatConnectionContract, {
               room,
               status: 'error',
-              code: 'CHAT_OPERATION_FAILED',
-              message: 'Unable to refresh room history',
+              code: protocolInvalid ? 'CHAT_PROTOCOL_INVALID' : 'CHAT_OPERATION_FAILED',
+              message: protocolInvalid ? error.message : 'Unable to refresh room history',
               reference: wantedReference ?? undefined,
-              retryable: true,
+              retryable: !protocolInvalid,
             })
           })
       }
@@ -393,6 +470,8 @@ export function registerChatHandlers(registry: ServiceRegistry): void {
         { reference: roomId, bootstrap: nodeArg?.trim() || undefined }
       )
       if (generation !== currentGeneration) ipcFailure('CHAT_DISCONNECTED', 'Room selection changed')
+      const pending = await getPending(joined.room)
+      if (generation !== currentGeneration) ipcFailure('CHAT_DISCONNECTED', 'Room selection changed')
       activeRoom = joined.room
       return {
         connected: true as const,
@@ -405,10 +484,11 @@ export function registerChatHandlers(registry: ServiceRegistry): void {
           items: joined.timeline.items.map((item) => timelineItem(item, identity?.identityKey)),
           hasMore: joined.timeline.has_more,
         },
+        pending,
       }
     } catch (error) {
       if (generation === currentGeneration && !wantedRoom) manager.setActive(false)
-      publicFailure(error)
+      fail(error)
     }
   })
 
@@ -424,7 +504,7 @@ export function registerChatHandlers(registry: ServiceRegistry): void {
       if (mapped.kind !== 'message') ipcFailure('CHAT_PROTOCOL_INVALID', 'Messenger returned a non-message commit')
       return { sent: true as const, item: mapped, identity: identity ?? undefined }
     } catch (error) {
-      publicFailure(error)
+      fail(error)
     }
   })
 
@@ -444,7 +524,43 @@ export function registerChatHandlers(registry: ServiceRegistry): void {
       )
       return { sent: true, id: sent.id, ts: sent.timestamp * 1000, identity: identity ?? undefined }
     } catch (error) {
-      publicFailure(error)
+      fail(error)
+    }
+  })
+
+  secureContractHandle(chatPendingContract, async (roomId) => {
+    requireSelectedRoom(roomId)
+    try {
+      return { pending: await getPending(roomId) }
+    } catch (error) {
+      fail(error)
+    }
+  })
+
+  secureContractHandle(chatRetryPendingContract, async (roomId, eventId) => {
+    requireRoom(roomId)
+    try {
+      const item = await request(
+        'room.retryPending',
+        rpcEventSchema.refine((event) => event.room === roomId && event.event_id === eventId),
+        { room: roomId, event_id: eventId }
+      )
+      return { item: timelineItem(item, identity?.identityKey) }
+    } catch (error) {
+      fail(error)
+    }
+  })
+
+  secureContractHandle(chatDiscardPendingContract, async (roomId, eventId) => {
+    requireSelectedRoom(roomId)
+    try {
+      await request('room.discardPending', z.object({ discarded: z.literal(true) }), {
+        room: roomId,
+        event_id: eventId,
+      })
+      return { discarded: true as const }
+    } catch (error) {
+      fail(error)
     }
   })
 
@@ -481,7 +597,7 @@ export function registerChatHandlers(registry: ServiceRegistry): void {
       )
       return { committed: true as const, item: timelineItem(item, identity?.identityKey) }
     } catch (error) {
-      publicFailure(error)
+      fail(error)
     }
   })
 
@@ -501,7 +617,7 @@ export function registerChatHandlers(registry: ServiceRegistry): void {
         )
         return { items: page.items.map((item) => timelineItem(item, identity?.identityKey)), hasMore: page.has_more }
       } catch (error) {
-        publicFailure(error)
+        return fail(error)
       }
     }
   )
@@ -510,14 +626,30 @@ export function registerChatHandlers(registry: ServiceRegistry): void {
     try {
       return await getIdentity()
     } catch (error) {
-      publicFailure(error)
+      fail(error)
     }
   })
   secureContractHandle(chatLinkIdentityContract, async () => {
     try {
       return await getIdentity()
     } catch (error) {
-      publicFailure(error)
+      fail(error)
+    }
+  })
+  secureContractHandle(chatPrepareDomainLinkContract, async (domain) => {
+    try {
+      const value = await request('identity.prepareDomainLink', rpcDomainLinkSchema, { domain })
+      return { domain: value.Domain, category: value.Category, key: value.Key, owner: value.Owner, txUrl: value.TxURL }
+    } catch (error) {
+      fail(error)
+    }
+  })
+  secureContractHandle(chatOpenDomainLinkContract, async (txUrl) => {
+    try {
+      await shell.openExternal(txUrl)
+      return { opened: true as const }
+    } catch {
+      ipcFailure('WALLET_OPEN_FAILED', 'Unable to open a wallet. Scan the QR code or copy the transaction link.')
     }
   })
   secureContractHandle(chatClaimDomainContract, async (domain) => {
@@ -526,10 +658,22 @@ export function registerChatHandlers(registry: ServiceRegistry): void {
       identity = ownIdentity(value)
       return { ok: true, identity }
     } catch (error) {
+      if (
+        error instanceof MessengerRpcError &&
+        (error.code === 'PROTOCOL_ERROR' || error.code === 'PROTOCOL_INVALID')
+      ) {
+        fail(error)
+      }
+      let currentIdentity: OwnChatIdentity
+      try {
+        currentIdentity = await getIdentity()
+      } catch (identityError) {
+        return fail(identityError)
+      }
       return {
         ok: false,
         reason: error instanceof Error ? error.message : 'Domain verification failed',
-        identity: await getIdentity(),
+        identity: currentIdentity,
       }
     }
   })
@@ -538,7 +682,7 @@ export function registerChatHandlers(registry: ServiceRegistry): void {
       identity = ownIdentity(await request('identity.clearDomain', rpcIdentitySchema))
       return identity
     } catch (error) {
-      publicFailure(error)
+      fail(error)
     }
   })
   secureContractHandle(chatDetectDomainsContract, async () => ({ domains: [] }))
@@ -548,7 +692,7 @@ export function registerChatHandlers(registry: ServiceRegistry): void {
       identity = ownIdentity(await request('identity.reset', rpcIdentitySchema, { expected_key: current.identityKey }))
       return identity
     } catch (error) {
-      publicFailure(error)
+      fail(error)
     }
   })
   secureContractHandle(chatDisconnectContract, async () => {
@@ -560,18 +704,18 @@ export function registerChatHandlers(registry: ServiceRegistry): void {
     return { disconnected: true as const }
   })
   secureContractHandle(chatLeaveContract, async (roomId) => {
-    if (wantedRoom === roomId) {
-      generation++
-      activeRoom = null
-      wantedRoom = null
-      wantedReference = null
-      manager.setActive(false)
-    }
     try {
       await request('room.leave', z.object({ left: z.literal(true) }), { reference: roomId })
+      if (wantedRoom === roomId) {
+        generation++
+        activeRoom = null
+        wantedRoom = null
+        wantedReference = null
+        manager.setActive(false)
+      }
       return { left: true as const }
     } catch (error) {
-      publicFailure(error)
+      fail(error)
     }
   })
 }

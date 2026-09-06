@@ -57,6 +57,31 @@ describe('main renderer preload boundary', () => {
     expect(electron.invoke).toHaveBeenCalledWith('settings:diagnostics:copy')
   })
 
+  it('exposes pending Messenger recovery through canonical channels', async () => {
+    const api = await loadPreload()
+    const room = 'R'.repeat(43)
+    const eventId = 'E'.repeat(43)
+    electron.invoke.mockResolvedValue({ pending: null })
+    await api.chat.pending(room)
+    electron.invoke.mockResolvedValue({ item: {} })
+    await api.chat.retryPending(room, eventId)
+    electron.invoke.mockResolvedValue({ discarded: true })
+    await api.chat.discardPending(room, eventId)
+
+    expect(electron.invoke).toHaveBeenCalledWith('chat:pending', room)
+    expect(electron.invoke).toHaveBeenCalledWith('chat:pending:retry', room, eventId)
+    expect(electron.invoke).toHaveBeenCalledWith('chat:pending:discard', room, eventId)
+  })
+
+  it('exposes domain transaction preparation and wallet opening', async () => {
+    const api = await loadPreload()
+    const txUrl = `ton://transfer/${'E'.repeat(48)}?bin=abc&amount=20000000`
+    await api.chat.prepareDomainLink('alice.ton')
+    await api.chat.openDomainLink(txUrl)
+    expect(electron.invoke).toHaveBeenCalledWith('chat:identity:prepare-domain-link', 'alice.ton')
+    expect(electron.invoke).toHaveBeenCalledWith('chat:identity:open-domain-link', txUrl)
+  })
+
   it('turns a sanitized IPC failure envelope into a typed rejected client call', async () => {
     electron.invoke.mockResolvedValue({
       ok: false,

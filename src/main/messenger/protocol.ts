@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { DomainTransactionUrlSchema } from '../../shared/ipc-contract/chat'
 
 const key = z.string().regex(/^[A-Za-z0-9_-]{43}$/)
 export const rpcRoomKeySchema = key
@@ -14,6 +15,13 @@ const timestamp = z
   .max(Math.floor(8.64e15 / 1000))
 
 export const rpcIdentitySchema = z.object({ key, name: z.string().max(64), domain: z.string().max(126).optional() })
+export const rpcDomainLinkSchema = z.object({
+  Domain: z.string().min(1).max(126),
+  Category: z.literal('msg_id'),
+  Key: key,
+  Owner: z.string().min(1).max(128),
+  TxURL: DomainTransactionUrlSchema,
+})
 const actor = z.object({ key, name: z.string().max(64), domain: z.string().max(126).optional() })
 const event = z.object({
   room: key,
@@ -23,6 +31,28 @@ const event = z.object({
   committed_at: timestamp,
   actor,
 })
+
+const pendingEvent = z.object({ actor })
+export const rpcPendingEventSchema = z.discriminatedUnion('kind', [
+  pendingEvent.extend({ kind: z.literal('message'), text: z.string().max(2048) }),
+  pendingEvent.extend({ kind: z.literal('pin'), target_message_id: sequence }),
+  pendingEvent.extend({ kind: z.literal('unpin'), target_message_id: sequence }),
+  pendingEvent.extend({ kind: z.literal('metadata'), name: z.string().max(64), description: z.string().max(512) }),
+  pendingEvent.extend({ kind: z.literal('write-policy'), write_policy: z.enum(['everyone', 'admins']) }),
+  pendingEvent.extend({ kind: z.literal('admin-grant'), subject_key: key }),
+  pendingEvent.extend({ kind: z.literal('admin-revoke'), subject_key: key }),
+  pendingEvent.extend({ kind: z.literal('moderator-grant'), subject_key: key }),
+  pendingEvent.extend({ kind: z.literal('moderator-revoke'), subject_key: key }),
+])
+
+export const rpcPendingOperationSchema = z.object({
+  room: key,
+  event_id: key,
+  status: z.enum(['uncertain', 'committed']),
+  timestamp,
+  event: rpcPendingEventSchema,
+})
+export const rpcPendingResultSchema = z.object({ pending: rpcPendingOperationSchema.nullable() })
 
 export const rpcEventSchema = z.discriminatedUnion('kind', [
   event.extend({ kind: z.literal('message'), text: z.string().max(2048) }),
@@ -97,3 +127,4 @@ export type RpcEvent = z.infer<typeof rpcEventSchema>
 export type RpcState = z.infer<typeof rpcStateSchema>
 export type RpcPresence = z.infer<typeof rpcPresenceSchema>
 export type RpcConnection = z.infer<typeof connection>
+export type RpcPendingOperation = z.infer<typeof rpcPendingOperationSchema>

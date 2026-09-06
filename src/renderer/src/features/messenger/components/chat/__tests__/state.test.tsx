@@ -73,4 +73,16 @@ describe('Messenger local state', () => {
     expect(localStorage.getItem('groupchat.rooms')).toBe(legacy)
     expect(JSON.parse(localStorage.getItem('messenger.rooms.v1')!)).toHaveLength(1)
   })
+
+  it('preserves t.me aliases through canonicalization and reload', async () => {
+    localStorage.setItem('messenger.rooms.v1', JSON.stringify([{ room: 'team_member.t.me' }]))
+    await act(async () => root.render(<Harness />))
+    expect(rooms.rooms[0].room).toBe('team_member.t.me')
+    act(() => rooms.canonicalize('team_member.t.me', room))
+    expect(rooms.rooms[0]).toMatchObject({ room, alias: 'team_member.t.me' })
+    act(() => root.unmount())
+    root = createRoot(container)
+    await act(async () => root.render(<Harness />))
+    expect(rooms.rooms[0]).toMatchObject({ room, alias: 'team_member.t.me' })
+  })
 })

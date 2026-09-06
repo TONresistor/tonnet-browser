@@ -2,6 +2,7 @@ import { useRef, useState } from 'react'
 import { X } from 'lucide-react'
 import { useFocusTrap } from '@/hooks/useFocusTrap'
 import { ActionButton } from '@/components/ui/ios/ActionButton'
+import { isMessengerReference as isValidReference } from '@/features/messenger/domain'
 
 interface AddRoomModalProps {
   isOpen: boolean
@@ -61,7 +62,7 @@ export function AddRoomModal({ isOpen, onClose, onAdd }: AddRoomModalProps): Rea
         </h3>
 
         <label className="mb-2 block text-xs font-medium uppercase tracking-wider text-muted-foreground">
-          Room key or .ton domain
+          Room key or .ton / .t.me domain
         </label>
         <input
           value={room}
@@ -85,8 +86,4 @@ export function AddRoomModal({ isOpen, onClose, onAdd }: AddRoomModalProps): Rea
       </div>
     </div>
   )
-}
-
-function isValidReference(value: string): boolean {
-  return /^[A-Za-z0-9_-]{43}$/.test(value) || /^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.ton$/i.test(value)
 }

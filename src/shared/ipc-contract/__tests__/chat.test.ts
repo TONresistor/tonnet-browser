@@ -3,6 +3,9 @@ import {
   ChatRoomPresenceSchema,
   ChatRoomStateSchema,
   chatConnectContract,
+  ChatPendingOperationSchema,
+  chatPendingContract,
+  chatRetryPendingContract,
   chatRoomPresenceContract,
   chatRoomStateContract,
 } from '../chat'
@@ -45,7 +48,26 @@ describe('chat IPC contracts', () => {
         connection,
         presence,
         timeline: { items: [], hasMore: false },
+        pending: null,
       })
     ).toBeDefined()
+  })
+
+  it('validates pending-operation recovery contracts', () => {
+    const pending = {
+      room: state.roomId,
+      eventId: 'P'.repeat(43),
+      status: 'uncertain' as const,
+      ts: 1_788_553_280_000,
+      kind: 'message' as const,
+      summary: 'hello',
+      text: 'hello',
+    }
+    expect(ChatPendingOperationSchema.parse(pending)).toEqual(pending)
+    expect(chatPendingContract.output.parse({ pending })).toEqual({ pending })
+    expect(chatRetryPendingContract.input.parse([state.roomId, pending.eventId])).toEqual([
+      state.roomId,
+      pending.eventId,
+    ])
   })
 })
